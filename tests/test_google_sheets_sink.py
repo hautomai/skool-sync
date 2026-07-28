@@ -189,6 +189,6 @@ def test_write_members_filtered_to_converted(
     # The sink now replaces the entire sheet, starting with the header row.
     assert written_rows[0] == MEMBER_HEADERS
     # Data row: member key is the first column, email is the second.
-    assert written_rows[1][0] == "jane|doe"
+    assert written_rows[1][0] == "email:jane@example.com"
     assert written_rows[1][1] == "jane@example.com"
     assert written_rows[1][2] == "Jane"

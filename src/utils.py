@@ -66,27 +66,18 @@ def safe_filename(name: str) -> str:
     return "".join(c if c.isalnum() or c in "._- " else "_" for c in name).strip()
 
 
-def member_key(first_name: str = "", last_name: str = "") -> str:
-    """Stable identity key based on normalized first and last name.
-
-    The key is lowercased and stripped of extra whitespace. It is used
-    instead of email because some Skool exports do not include emails.
-    """
-    key = f"{first_name.strip().lower()}|{last_name.strip().lower()}"
-    if key == "|":
-        return ""
-    return key
-
-
-def match_key(email: str, first_name: str, last_name: str) -> str:
-    """Best-effort matching key.
+def generate_key(email: str = "", first_name: str = "", last_name: str = "") -> str:
+    """Stable identity key for a member.
 
     Prefer email when available (it is unique and survives name changes).
-    Fall back to the name-based key when email is absent.
+    Fall back to a normalized first_name|last_name key when email is absent.
     """
     clean_email = email.strip().lower()
     if clean_email:
         return f"email:{clean_email}"
-    return member_key(first_name, last_name)
+    key = f"{first_name.strip().lower()}|{last_name.strip().lower()}"
+    if key == "|":
+        return ""
+    return key
 
 

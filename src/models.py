@@ -7,7 +7,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Any
 
-from .utils import match_key, member_key
+from .utils import generate_key
 
 
 class CommunityType(str, Enum):
@@ -49,11 +49,7 @@ class Member:
 
     @property
     def key(self) -> str:
-        return member_key(self.first_name, self.last_name)
-
-    @property
-    def match_key(self) -> str:
-        return match_key(self.email, self.first_name, self.last_name)
+        return generate_key(self.email, self.first_name, self.last_name)
 
 
 @dataclass
@@ -81,11 +77,7 @@ class MemberState:
 
     @property
     def key(self) -> str:
-        return member_key(self.first_name, self.last_name)
-
-    @property
-    def match_key(self) -> str:
-        return match_key(self.email, self.first_name, self.last_name)
+        return generate_key(self.email, self.first_name, self.last_name)
 
 
 @dataclass

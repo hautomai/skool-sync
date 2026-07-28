@@ -78,7 +78,7 @@ def test_members_without_email_are_matched_by_name():
         full_name="NoEmail Person",
     )
     states = engine._compute_new_states({}, [member_with_email, member_without_email], [])
-    assert "john|doe" in states
+    assert "email:john@example.com" in states
     assert "noemail|person" in states
     assert "" not in states
 
@@ -92,16 +92,16 @@ def test_email_fallback_links_records_across_name_changes():
 
     free_member = _member("Jane", "Doe", CommunityType.FREE, "2024-01-01", email="jane@example.com")
     states = engine._compute_new_states({}, [free_member], [])
-    assert states["jane|doe"].email == "jane@example.com"
+    assert states["email:jane@example.com"].email == "jane@example.com"
 
     # Same email, different name: the historical state should be found by email.
     paid_member = _member("Jane", "Smith", CommunityType.PAID, "2024-01-05", email="jane@example.com")
     states = engine._compute_new_states(states, [], [paid_member])
 
-    assert "jane|smith" in states
-    assert states["jane|smith"].email == "jane@example.com"
-    assert states["jane|smith"].conversion_detected_at == "2024-01-05"
-    assert states["jane|smith"].current_status == "converted"
+    assert "email:jane@example.com" in states
+    assert states["email:jane@example.com"].email == "jane@example.com"
+    assert states["email:jane@example.com"].conversion_detected_at == "2024-01-05"
+    assert states["email:jane@example.com"].current_status == "converted"
 
 
 def test_duplicate_name_warning_is_logged(caplog):

@@ -85,21 +85,30 @@ class SyncEngine:
         )
 
     def _warn_duplicate_keys(self, members: list[Member], community: CommunityType) -> None:
-        """Log a warning when two active members share the same first+last name."""
+        """Log a warning when two active members share the same identity key."""
         from collections import Counter
 
         counts: dict[str, int] = Counter(m.key for m in members if m.key)
         for key, count in counts.items():
             if count > 1:
-                first, last = key.split("|", 1)
-                logger.warning(
-                    "Duplicate name key in %s community: %s %s appears %d times. "
-                    "These rows will be merged into a single member record.",
-                    community.value,
-                    first,
-                    last,
-                    count,
-                )
+                if key.startswith("email:"):
+                    logger.warning(
+                        "Duplicate email key in %s community: %s appears %d times. "
+                        "These rows will be merged into a single member record.",
+                        community.value,
+                        key,
+                        count,
+                    )
+                else:
+                    first, last = key.split("|", 1)
+                    logger.warning(
+                        "Duplicate name key in %s community: %s %s appears %d times. "
+                        "These rows will be merged into a single member record.",
+                        community.value,
+                        first,
+                        last,
+                        count,
+                    )
 
     def _compute_new_states(
         self,
@@ -107,47 +116,37 @@ class SyncEngine:
         free_members: list[Member],
         paid_members: list[Member],
     ) -> dict[str, MemberState]:
-        # Warn about duplicate names within the same community before indexing.
+        # Warn about duplicate keys within the same community before indexing.
         self._warn_duplicate_keys(free_members, CommunityType.FREE)
         self._warn_duplicate_keys(paid_members, CommunityType.PAID)
 
-        # Daily merge uses name key because one side may not have an email.
+        # Index today's members by email-first key.
         free_by_key: dict[str, Member] = {m.key: m for m in free_members if m.key}
         paid_by_key: dict[str, Member] = {m.key: m for m in paid_members if m.key}
-        all_name_keys = set(free_by_key.keys()) | set(paid_by_key.keys())
+        all_keys = set(free_by_key.keys()) | set(paid_by_key.keys())
 
-        # Historical lookup by match key (email when available, otherwise name).
-        existing_by_match_key: dict[str, MemberState] = {}
+        # Re-index existing states by the new email-first key. This upgrades
+        # legacy name-only keys to email keys when an email is present.
+        existing_by_key: dict[str, MemberState] = {}
         for state in existing.values():
-            key = state.match_key
-            if key in existing_by_match_key:
+            key = state.key
+            if key in existing_by_key:
                 logger.warning(
-                    "Duplicate match key in existing data: %s. "
+                    "Duplicate key in existing data: %s. "
                     "Two different member records share the same email/name.",
                     key,
                 )
             else:
-                existing_by_match_key[key] = state
+                existing_by_key[key] = state
 
-        # Track existing states already claimed by today's records so we don't
-        # incorrectly mark them as removed when the matching key changed.
-        claimed_existing_name_keys: set[str] = set()
-
-        # Track today's final states keyed by name (for reporting/removals).
         states: dict[str, MemberState] = {}
 
-        for name_key in all_name_keys:
-            free_member = free_by_key.get(name_key)
-            paid_member = paid_by_key.get(name_key)
+        for key in all_keys:
+            free_member = free_by_key.get(key)
+            paid_member = paid_by_key.get(key)
             representative = free_member or paid_member
 
-            # Try to find an existing state. Prefer email-based match, fall back to name.
-            state: MemberState | None = None
-            if representative and representative.email:
-                state = existing_by_match_key.get(representative.match_key)
-            if state is None:
-                state = existing.get(name_key)
-
+            state = existing_by_key.get(key)
             if state is None:
                 state = MemberState(
                     email=representative.email if representative else "",
@@ -156,15 +155,7 @@ class SyncEngine:
                     full_name=representative.full_name if representative else "",
                 )
             else:
-                # Record that this historical state has been claimed by a
-                # current record (possibly under a different name key).
-                for existing_name_key, existing_state in existing.items():
-                    if existing_state is state:
-                        claimed_existing_name_keys.add(existing_name_key)
-                        break
-
-                # If the record was found by email but the name changed,
-                # update the state so its key matches the current row.
+                # Update name fields if the member's name changed.
                 if representative:
                     if representative.first_name:
                         state.first_name = representative.first_name
@@ -184,17 +175,15 @@ class SyncEngine:
                 state = flag_removed(state, CommunityType.PAID, self.today)
 
             state.last_synced_at = utc_now().isoformat()
-            states[name_key] = state
+            states[key] = state
 
-        # Members no longer in either community should be flagged removed
-        for name_key, state in existing.items():
-            if name_key in claimed_existing_name_keys:
-                continue
-            if name_key not in all_name_keys:
+        # Members no longer in either community should be flagged removed.
+        for key, state in existing_by_key.items():
+            if key not in all_keys:
                 state = flag_removed(state, CommunityType.FREE, self.today)
                 state = flag_removed(state, CommunityType.PAID, self.today)
                 state.last_synced_at = utc_now().isoformat()
-                states[name_key] = state
+                states[key] = state
 
         return detect_conversions(states)
 
@@ -261,7 +250,12 @@ class SyncEngine:
                 existing_states: dict[str, MemberState] = {}
                 existing_ids: dict[str, str] = {}
             else:
-                existing_states, existing_ids = self.sink.fetch_existing()
+                raw_existing_states, existing_ids = self.sink.fetch_existing()
+                # Re-index existing states by the current email-first key so legacy
+                # name-only rows are matched correctly.
+                existing_states = {
+                    state.key: state for state in raw_existing_states.values() if state.key
+                }
 
             new_states = self._compute_new_states(existing_states, free_members, paid_members)
 

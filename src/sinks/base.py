@@ -12,7 +12,7 @@ class Sink(ABC):
 
     @abstractmethod
     def fetch_existing(self) -> tuple[dict[str, MemberState], dict[str, str]]:
-        """Return (member_key -> MemberState, member_key -> row record ID)."""
+        """Return (identity_key -> MemberState, identity_key -> row record ID)."""
         ...
 
     @abstractmethod

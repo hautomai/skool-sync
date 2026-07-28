@@ -31,6 +31,13 @@ logger = logging.getLogger("skool_sync")
 
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 
+
+def _index_or_none(header: list[str], column_name: str) -> int | None:
+    try:
+        return header.index(column_name)
+    except ValueError:
+        return None
+
 MEMBER_HEADERS = [
     "Member key",
     "Email",
@@ -217,6 +224,9 @@ class GoogleSheetsSink(Sink):
         except ValueError:
             email_col = None
 
+        first_name_col = _index_or_none(header, "first name")
+        last_name_col = _index_or_none(header, "last name")
+
         for row_idx, row in enumerate(values[1:], start=2):
             if not row:
                 continue
@@ -235,8 +245,19 @@ class GoogleSheetsSink(Sink):
 
             if not key or key == "|":
                 continue
-            first_name, _, last_name = key.partition("|")
+
             email = row[email_col].strip().lower() if email_col is not None and email_col < len(row) else ""
+
+            # Prefer first/last from dedicated columns; fall back to parsing the key.
+            if first_name_col is not None and last_name_col is not None:
+                first_name = row[first_name_col].strip() if first_name_col < len(row) else ""
+                last_name = row[last_name_col].strip() if last_name_col < len(row) else ""
+            elif not key.startswith("email:"):
+                first_name, _, last_name = key.partition("|")
+            else:
+                first_name = ""
+                last_name = ""
+
             state = MemberState(email=email, first_name=first_name, last_name=last_name)
             existing_states[key] = state
             existing_ids[key] = str(row_idx)

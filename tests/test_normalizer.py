@@ -74,7 +74,7 @@ def test_normalize_extracts_and_excludes_email():
     )
     assert "Email" not in member.membership_answers
     assert member.email == "jane@example.com"
-    assert member.match_key == "email:jane@example.com"
+    assert member.key == "email:jane@example.com"
 
 
 def test_normalize_splits_full_name_when_first_last_missing():
