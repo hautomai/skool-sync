@@ -1,0 +1,133 @@
+"""Tests for sync engine state computation."""
+
+from __future__ import annotations
+
+from datetime import datetime, timezone
+
+from src.config import Settings
+from src.exporters.dummy_exporter import DummySkoolExporter
+from src.models import CommunityType, Member, MemberState
+from src.sinks.base import Sink
+from src.sync_engine import SyncEngine
+
+
+class DummySink(Sink):
+    def fetch_existing(self):
+        return {}, {}
+
+    def write_members(self, members, existing_states, existing_ids):
+        pass
+
+    def write_daily_metrics(self, metrics):
+        pass
+
+    def write_sync_run(self, summary):
+        pass
+
+
+def _member(first_name: str, last_name: str, community: CommunityType, snapshot_date: str, email: str = "") -> Member:
+    return Member(
+        email=email,
+        community_type=community,
+        community_name=community.value,
+        community_slug=community.value,
+        source_file=f"{community.value}.csv",
+        imported_at=datetime.now(timezone.utc),
+        snapshot_date=snapshot_date,
+        first_name=first_name,
+        last_name=last_name,
+        full_name=f"{first_name} {last_name}".strip(),
+    )
+
+
+def test_compute_new_states_detects_conversion():
+    settings = Settings(
+        free_community_url="https://www.skool.com/free",
+        paid_community_url="https://www.skool.com/paid",
+    )
+    engine = SyncEngine(settings, sink=DummySink(), exporter=DummySkoolExporter())
+
+    free_member = _member("Jane", "Doe", CommunityType.FREE, "2024-01-01")
+    paid_member = _member("Jane", "Doe", CommunityType.PAID, "2024-01-02")
+
+    states = engine._compute_new_states({}, [free_member], [])
+    assert states["jane|doe"].current_status == "free_only"
+
+    states = engine._compute_new_states(states, [], [paid_member])
+    assert states["jane|doe"].conversion_detected_at == "2024-01-02"
+    assert states["jane|doe"].current_status == "converted"
+
+
+def test_members_without_email_are_matched_by_name():
+    settings = Settings(
+        free_community_url="https://www.skool.com/free",
+        paid_community_url="https://www.skool.com/paid",
+    )
+    engine = SyncEngine(settings, sink=DummySink(), exporter=DummySkoolExporter())
+    member_with_email = _member("John", "Doe", CommunityType.FREE, "2024-01-01", email="john@example.com")
+    member_without_email = Member(
+        email="",
+        community_type=CommunityType.FREE,
+        community_name="Free",
+        community_slug="free",
+        source_file="free.csv",
+        imported_at=datetime.now(timezone.utc),
+        snapshot_date="2024-01-01",
+        first_name="NoEmail",
+        last_name="Person",
+        full_name="NoEmail Person",
+    )
+    states = engine._compute_new_states({}, [member_with_email, member_without_email], [])
+    assert "john|doe" in states
+    assert "noemail|person" in states
+    assert "" not in states
+
+
+def test_email_fallback_links_records_across_name_changes():
+    settings = Settings(
+        free_community_url="https://www.skool.com/free",
+        paid_community_url="https://www.skool.com/paid",
+    )
+    engine = SyncEngine(settings, sink=DummySink(), exporter=DummySkoolExporter())
+
+    free_member = _member("Jane", "Doe", CommunityType.FREE, "2024-01-01", email="jane@example.com")
+    states = engine._compute_new_states({}, [free_member], [])
+    assert states["jane|doe"].email == "jane@example.com"
+
+    # Same email, different name: the historical state should be found by email.
+    paid_member = _member("Jane", "Smith", CommunityType.PAID, "2024-01-05", email="jane@example.com")
+    states = engine._compute_new_states(states, [], [paid_member])
+
+    assert "jane|smith" in states
+    assert states["jane|smith"].email == "jane@example.com"
+    assert states["jane|smith"].conversion_detected_at == "2024-01-05"
+    assert states["jane|smith"].current_status == "converted"
+
+
+def test_duplicate_name_warning_is_logged(caplog):
+    settings = Settings(
+        free_community_url="https://www.skool.com/free",
+        paid_community_url="https://www.skool.com/paid",
+    )
+    engine = SyncEngine(settings, sink=DummySink(), exporter=DummySkoolExporter())
+    member1 = _member("Jane", "Doe", CommunityType.FREE, "2024-01-01")
+    member2 = _member("Jane", "Doe", CommunityType.FREE, "2024-01-02")
+    with caplog.at_level("WARNING"):
+        engine._compute_new_states({}, [member1, member2], [])
+    assert "Duplicate name key" in caplog.text
+
+
+def test_conversion_detected_when_emails_differ_but_name_matches():
+    settings = Settings(
+        free_community_url="https://www.skool.com/free",
+        paid_community_url="https://www.skool.com/paid",
+    )
+    engine = SyncEngine(settings, sink=DummySink(), exporter=DummySkoolExporter())
+    free_member = _member("Jane", "Doe", CommunityType.FREE, "2024-01-01")
+    paid_member = _member("Jane", "Doe", CommunityType.PAID, "2024-01-05")
+
+    states = engine._compute_new_states({}, [free_member], [paid_member])
+
+    assert "jane|doe" in states
+    assert states["jane|doe"].conversion_detected_at == "2024-01-05"
+    assert states["jane|doe"].current_status == "converted"

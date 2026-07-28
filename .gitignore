@@ -1,0 +1,29 @@
+# Secrets and environment
+.env
+.env.local
+*.env.backup
+*.env.back
+
+# Virtual environment
+.venv/
+venv/
+env/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# Data and credentials
+data/
+!data/.gitkeep
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
