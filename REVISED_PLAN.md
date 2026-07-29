@@ -1,16 +1,15 @@
 # Skool → Airtable Sync — Revised Plan
 
 ## User decisions
-1. **Export backend**: Playwright now, with a pluggable backend interface so an Apify actor can be swapped in later.
-2. **Auth**: Try `storage_state` (saved session) first, fall back to email/password login.
+1. **Export backend**: Apify actor (`cristiantala/skool-all-in-one-api`) with a pluggable exporter interface for future backends.
+2. **Auth**: Apify token + Skool email/password passed to the actor.
 3. **Sink**: Prefer simple. Either Google Sheets **or** one Airtable table with all member information.
 4. **Departed members**: Soft-delete / archive only; do not create new snapshot rows for removed members.
 5. **Notifications**: Local JSON report only; n8n can forward it elsewhere if needed.
 
 ## Proposed architecture
 - `src/exporters/base.py` — abstract `SkoolExporter` interface.
-- `src/exporters/playwright_exporter.py` — primary implementation.
-- `src/exporters/apify_exporter.py` — stub/adapter for later.
+- `src/exporters/apify_exporter.py` — production implementation using the Apify actor.
 - `src/sinks/base.py` — abstract `Sink` interface.
 - `src/sinks/airtable_sink.py` — single-table design with history columns.
 - `src/sinks/google_sheets_sink.py` — optional alternative sink.
