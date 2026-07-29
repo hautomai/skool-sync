@@ -216,7 +216,9 @@ class SyncEngine:
                 new_free += 1
             if state.paid_status == "active" and (not old or old.paid_status != "active"):
                 new_paid += 1
-            if state.conversion_detected_at and state.conversion_detected_at.startswith(self.today):
+            # Count conversions incrementally: a member counts as a new conversion
+            # when their lifecycle status becomes "converted" on this run.
+            if state.current_status == "converted" and (not old or old.current_status != "converted"):
                 conversions += 1
             if old and old.free_status == "active" and state.free_status == "removed":
                 removed_free += 1

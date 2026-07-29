@@ -154,3 +154,26 @@ def test_conversion_detected_when_emails_differ_but_name_matches():
     assert "jane|doe" in states
     assert states["jane|doe"].conversion_detected_at == "2024-01-05 00:00:00"
     assert states["jane|doe"].current_status == "converted"
+
+
+def test_detected_conversions_are_incremental():
+    """Conversions are counted once; repeated runs on the same converted member report 0."""
+    settings = Settings(
+        free_community_url="https://www.skool.com/free",
+        paid_community_url="https://www.skool.com/paid",
+    )
+    engine = SyncEngine(settings, sink=DummySink(), exporter=DummySkoolExporter())
+    free_member = _member("Jane", "Doe", CommunityType.FREE, "2024-01-01")
+    paid_member = _member("Jane", "Doe", CommunityType.PAID, "2024-01-02")
+
+    # First run: Jane converts.
+    states = engine._compute_new_states({}, [free_member], [])
+    states = engine._compute_new_states(states, [], [paid_member])
+    metrics = engine._calculate_metrics({}, states, 0, 0.0)
+    assert metrics.detected_conversions == 1
+    assert metrics.new_paid_members == 1
+
+    # Second run: same state, no new conversions.
+    metrics = engine._calculate_metrics(states, states, 0, 0.0)
+    assert metrics.detected_conversions == 0
+    assert metrics.new_paid_members == 0
