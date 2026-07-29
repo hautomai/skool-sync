@@ -115,7 +115,9 @@ python -m src.main --dry-run
 python -m src.main
 ```
 
-The Google Sheet will now contain a **Members** tab and a **DailyMetrics** tab.
+The Google Sheet will now contain a **Members** tab, a **DailyMetrics** tab, and a **SyncRuns** tab.
+
+> **Note:** the sink now updates existing rows in place and appends only new rows, rather than clearing the whole sheet every run. This makes daily syncs much faster and preserves any extra columns you add beyond the standard schema.
 
 ## Scheduling
 

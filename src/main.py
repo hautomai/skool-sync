@@ -1,4 +1,4 @@
-"""Main entry point for the daily Skool → Airtable sync.
+"""Main entry point for the daily Skool → Google Sheets sync.
 
 Usage:
     python -m src.main
@@ -16,7 +16,7 @@ from pathlib import Path
 
 from .config import Settings, get_settings
 from .csv_parser import parse_csv
-from .models import CommunityType, SyncSummary
+from .models import CommunityType, MemberState, SyncSummary
 from .normalizer import normalize_records
 from .reporter import human_summary, write_report
 from .exporters.dummy_exporter import DummySkoolExporter
@@ -63,7 +63,7 @@ def _load_snapshot(path: Path, community_type: CommunityType, snapshot_date: str
 
 
 def _backfill_from_dir(settings: Settings, backfill_dir: str) -> None:
-    """Backfill Airtable from a directory of pre-exported CSVs.
+    """Backfill Google Sheets from a directory of pre-exported CSVs.
 
     Expects files like:
         backfill_dir/free.csv
@@ -82,9 +82,13 @@ def _backfill_from_dir(settings: Settings, backfill_dir: str) -> None:
 
     logger.info("Backfilling from %s with %d free and %d paid members", base, len(free_members), len(paid_members))
 
-    sink = GoogleSheetsSink(settings)
+    sink = GoogleSheetsSink(settings) if not settings.dry_run else None
 
-    existing_states, existing_ids = sink.fetch_existing()
+    existing_states: dict[str, MemberState] = {}
+    existing_ids: dict[str, str] = {}
+    if sink is not None:
+        existing_states, existing_ids = sink.fetch_existing()
+
     started_at = utc_now()
     engine = SyncEngine(
         settings,
@@ -93,12 +97,16 @@ def _backfill_from_dir(settings: Settings, backfill_dir: str) -> None:
         run_date=snapshot_date,
     )
     states = engine._compute_new_states(existing_states, free_members, paid_members)
-    sink.write_members(list(states.values()), existing_states, existing_ids)
+
+    if sink is not None:
+        sink.write_members(list(states.values()), existing_states, existing_ids)
 
     finished_at = utc_now()
     runtime = (finished_at - started_at).total_seconds()
     metrics = engine._calculate_metrics(existing_states, states, failed_records=0, runtime_seconds=runtime)
-    sink.write_daily_metrics(metrics)
+
+    if sink is not None:
+        sink.write_daily_metrics(metrics)
 
     summary = SyncSummary(
         run_id=f"backfill-{snapshot_date}-{started_at.strftime('%H%M%S')}",
@@ -115,9 +123,12 @@ def _backfill_from_dir(settings: Settings, backfill_dir: str) -> None:
         runtime_seconds=metrics.runtime_seconds,
         communities=[settings.free_community_url, settings.paid_community_url],
         notes=[f"Backfill from {base}"],
-        dry_run=False,
+        dry_run=settings.dry_run,
     )
-    sink.write_sync_run(summary.__dict__)
+
+    if sink is not None:
+        sink.write_sync_run(summary.__dict__)
+
     logger.info("Backfill complete: %d member records written", len(states))
 
 

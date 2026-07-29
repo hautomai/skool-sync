@@ -38,6 +38,7 @@ def _index_or_none(header: list[str], column_name: str) -> int | None:
     except ValueError:
         return None
 
+
 MEMBER_HEADERS = [
     "Member key",
     "Email",
@@ -69,6 +70,27 @@ DAILY_METRICS_HEADERS = [
     "Runtime seconds",
 ]
 
+SYNC_RUNS_HEADERS = [
+    "Run ID",
+    "Started",
+    "Finished",
+    "Free members total",
+    "Paid members total",
+    "New free members",
+    "New paid members",
+    "Detected conversions",
+    "Removed free members",
+    "Removed paid members",
+    "Failed records",
+    "Runtime seconds",
+    "Dry run",
+    "Notes",
+]
+
+# Google Sheets API batchUpdate limit is 50,000 cells per request.
+# Keep chunks below that: 2000 rows * 15 columns = 30,000 cells.
+_BATCH_UPDATE_CHUNK_ROWS = 2000
+
 
 class GoogleSheetsSink(Sink):
     def __init__(self, settings: Settings):
@@ -82,6 +104,11 @@ class GoogleSheetsSink(Sink):
         self.members_sheet = settings.google_sheets_members_sheet
         self.metrics_sheet = settings.google_sheets_daily_metrics_sheet
         self.members_filter = settings.google_sheets_members_filter.lower()
+
+        # Populated by fetch_existing() and consumed by write_members().
+        self._existing_rows: dict[str, list[Any]] | None = None
+        self._existing_ids: dict[str, str] | None = None
+        self._header_present: bool = False
 
     def _load_credentials(self) -> Any:
         """Return valid Google credentials using service account or OAuth."""
@@ -162,20 +189,38 @@ class GoogleSheetsSink(Sink):
             body=body,
         ).execute()
 
-    def _update_rows(self, updates: list[tuple[int, list[Any]]]) -> None:
-        """Batch update rows by 1-based row index."""
+    @staticmethod
+    def _column_letter(index: int) -> str:
+        """Convert a 0-based column index to an A1-style column letter.
+
+        Supports more than 26 columns (e.g. 27 -> AA).
+        """
+        letters = []
+        while index >= 0:
+            letters.append(chr(ord("A") + (index % 26)))
+            index = index // 26 - 1
+        return "".join(reversed(letters))
+
+    def _batch_update_rows(self, updates: list[tuple[int, list[Any]]]) -> None:
+        """Batch-update rows by 1-based row index."""
         if not updates:
             return
-        data = []
-        for row_index, values in updates:
-            # Cap the range to the number of columns we are writing.
-            end_col = chr(ord("A") + len(values) - 1)
-            range_spec = f"{self.members_sheet}!A{row_index}:{end_col}{row_index}"
-            data.append({"range": range_spec, "values": [values]})
-        self.service.spreadsheets().values().batchUpdate(
-            spreadsheetId=self.spreadsheet_id,
-            body={"valueInputOption": "USER_ENTERED", "data": data},
-        ).execute()
+
+        def _to_request(row_index: int, values: list[Any]) -> dict:
+            end_col = self._column_letter(len(values) - 1)
+            return {
+                "values": [values],
+                "range": f"{self.members_sheet}!A{row_index}:{end_col}{row_index}",
+            }
+
+        for i in range(0, len(updates), _BATCH_UPDATE_CHUNK_ROWS):
+            chunk = updates[i : i + _BATCH_UPDATE_CHUNK_ROWS]
+            data = [_to_request(row_index, values) for row_index, values in chunk]
+            self.service.spreadsheets().values().batchUpdate(
+                spreadsheetId=self.spreadsheet_id,
+                body={"valueInputOption": "USER_ENTERED", "data": data},
+            ).execute()
+            logger.debug("Updated %d member rows in Google Sheets", len(chunk))
 
     def _find_or_create_sheet(self, sheet_name: str) -> None:
         """Ensure a sheet with the given name exists in the spreadsheet."""
@@ -203,79 +248,160 @@ class GoogleSheetsSink(Sink):
         except Exception as exc:
             logger.warning("Could not create sheet %s: %s", sheet_name, exc)
 
+    def _get_sheet_id(self, sheet_name: str) -> int | None:
+        try:
+            spreadsheet = self.service.spreadsheets().get(spreadsheetId=self.spreadsheet_id).execute()
+            for sheet in spreadsheet.get("sheets", []):
+                if sheet["properties"]["title"] == sheet_name:
+                    return sheet["properties"]["sheetId"]
+        except Exception as exc:
+            logger.warning("Could not find sheet id for %s: %s", sheet_name, exc)
+        return None
+
+    def _delete_rows(self, sheet_name: str, row_indices: list[int]) -> None:
+        """Delete 1-based row indices from a sheet in a single request."""
+        if not row_indices:
+            return
+
+        sheet_id = self._get_sheet_id(sheet_name)
+        if sheet_id is None:
+            logger.warning("Could not delete rows, sheet id not found for %s", sheet_name)
+            return
+
+        requests = []
+        for row_index in row_indices:
+            # Google Sheets API uses 0-based indices.
+            requests.append(
+                {
+                    "deleteDimension": {
+                        "range": {
+                            "sheetId": sheet_id,
+                            "dimension": "ROWS",
+                            "startIndex": row_index - 1,
+                            "endIndex": row_index,
+                        }
+                    }
+                }
+            )
+
+        self.service.spreadsheets().batchUpdate(
+            spreadsheetId=self.spreadsheet_id,
+            body={"requests": requests},
+        ).execute()
+        logger.info("Deleted %d stale rows from %s", len(row_indices), sheet_name)
+
+    @staticmethod
+    def _member_to_row(member: MemberState) -> list[Any]:
+        return [
+            member.key,
+            member.email,
+            member.first_name,
+            member.last_name,
+            member.full_name,
+            member.free_status,
+            member.paid_status,
+            member.free_joined_at,
+            member.paid_joined_at,
+            member.first_seen_free_at,
+            member.first_seen_paid_at,
+            member.conversion_detected_at,
+            member.current_status,
+            json.dumps(member.membership_answers),
+            member.last_synced_at,
+        ]
+
+    @staticmethod
+    def _row_to_member(row: list[Any], header: list[str]) -> MemberState | None:
+        """Parse a sheet row back into a MemberState using the column header."""
+        lower_header = [h.lower().strip() for h in header]
+
+        def _value(*candidates: str) -> str:
+            for candidate in candidates:
+                idx = _index_or_none(lower_header, candidate.lower())
+                if idx is not None and idx < len(row):
+                    val = row[idx]
+                    if val is not None:
+                        return str(val)
+            return ""
+
+        try:
+            membership_answers_raw = _value("membership answers")
+            membership_answers = json.loads(membership_answers_raw) if membership_answers_raw else {}
+        except Exception:
+            membership_answers = {}
+
+        return MemberState(
+            email=_value("email"),
+            first_name=_value("first name", "first_name"),
+            last_name=_value("last name", "last_name"),
+            full_name=_value("full name", "full_name"),
+            free_status=_value("free status", "free_status"),
+            paid_status=_value("paid status", "paid_status"),
+            free_joined_at=_value("free joined at", "free_joined_at"),
+            paid_joined_at=_value("paid joined at", "paid_joined_at"),
+            first_seen_free_at=_value("first seen free at", "first_seen_free_at"),
+            first_seen_paid_at=_value("first seen paid at", "first_seen_paid_at"),
+            conversion_detected_at=_value("conversion detected at", "conversion_detected_at"),
+            current_status=_value("current status", "current_status"),
+            membership_answers=membership_answers,
+            last_synced_at=_value("last synced at", "last_synced_at"),
+        )
+
     def fetch_existing(self) -> tuple[dict[str, MemberState], dict[str, str]]:
         """Read existing members and map member key -> (MemberState, row_number)."""
         self._find_or_create_sheet(self.members_sheet)
         values = self._sheet_values(f"{self.members_sheet}!A:Z")
-        if not values or len(values) < 2:
+        if not values:
+            self._existing_rows = {}
+            self._existing_ids = {}
+            self._header_present = False
             return {}, {}
 
-        header = [h.lower().strip() for h in values[0]]
+        self._header_present = True
+        if len(values) < 2:
+            self._existing_rows = {}
+            self._existing_ids = {}
+            return {}, {}
+
+        header = values[0]
+        lower_header = [h.lower().strip() for h in header]
+
         try:
-            key_col = header.index("member key")
+            key_col = lower_header.index("member key")
         except ValueError:
             key_col = None
 
         existing_states: dict[str, MemberState] = {}
-        existing_ids: dict[str, str] = {}  # row number as string for consistency
-
-        try:
-            email_col = header.index("email")
-        except ValueError:
-            email_col = None
-
-        first_name_col = _index_or_none(header, "first name")
-        last_name_col = _index_or_none(header, "last name")
+        self._existing_rows = {}
+        self._existing_ids = {}
 
         for row_idx, row in enumerate(values[1:], start=2):
             if not row:
                 continue
-            if key_col is not None:
-                key = row[key_col].strip().lower() if key_col < len(row) else ""
+
+            if key_col is not None and key_col < len(row):
+                key = str(row[key_col]).strip().lower()
             else:
-                # Fallback for legacy sheets without a Member key column.
+                # Legacy fallback: try first+last columns.
                 try:
-                    first_col = header.index("first name")
-                    last_col = header.index("last name")
-                    first = row[first_col].strip() if first_col < len(row) else ""
-                    last = row[last_col].strip() if last_col < len(row) else ""
+                    first_col = lower_header.index("first name")
+                    last_col = lower_header.index("last name")
+                    first = str(row[first_col]).strip() if first_col < len(row) else ""
+                    last = str(row[last_col]).strip() if last_col < len(row) else ""
                     key = f"{first}|{last}".lower()
-                except ValueError:
+                except (ValueError, IndexError):
                     continue
 
             if not key or key == "|":
                 continue
 
-            email = row[email_col].strip().lower() if email_col is not None and email_col < len(row) else ""
-
-            # Prefer first/last from dedicated columns; fall back to parsing the key.
-            if first_name_col is not None and last_name_col is not None:
-                first_name = row[first_name_col].strip() if first_name_col < len(row) else ""
-                last_name = row[last_name_col].strip() if last_name_col < len(row) else ""
-            elif not key.startswith("email:"):
-                first_name, _, last_name = key.partition("|")
-            else:
-                first_name = ""
-                last_name = ""
-
-            state = MemberState(email=email, first_name=first_name, last_name=last_name)
+            state = self._row_to_member(row, header) or MemberState()
             existing_states[key] = state
-            existing_ids[key] = str(row_idx)
+            self._existing_rows[key] = row
+            self._existing_ids[key] = str(row_idx)
 
         logger.info("Found %d existing members in Google Sheets", len(existing_states))
-        return existing_states, existing_ids
-
-    def _clear_sheet_data(self, sheet_name: str, include_header: bool = False) -> None:
-        """Clear all rows below the header, or the entire sheet if include_header is True."""
-        range_spec = f"{sheet_name}!A1:Z" if include_header else f"{sheet_name}!A2:Z"
-        try:
-            self.service.spreadsheets().values().clear(
-                spreadsheetId=self.spreadsheet_id,
-                range=range_spec,
-            ).execute()
-            logger.info("Cleared %s from %s", "entire sheet" if include_header else "data rows", sheet_name)
-        except Exception as exc:
-            logger.warning("Could not clear rows from %s: %s", sheet_name, exc)
+        return existing_states, self._existing_ids
 
     def write_members(
         self,
@@ -283,30 +409,64 @@ class GoogleSheetsSink(Sink):
         existing_states: dict[str, MemberState],
         existing_ids: dict[str, str],
     ) -> None:
+        # write_members expects fetch_existing() to have been called first,
+        # but be defensive in case it is ever invoked directly.
+        if self._existing_rows is None or self._existing_ids is None:
+            self.fetch_existing()
+
         # Filter the members list if the owner only wants converted members.
         if self.members_filter == "converted":
             members = [m for m in members if m.current_status == "converted"]
 
+        written_keys = {m.key for m in members}
+
+        # Ensure the header row is present before writing data.
+        if not self._header_present:
+            self._append_rows(self.members_sheet, [MEMBER_HEADERS])
+            self._header_present = True
+
+        updates: list[tuple[int, list[Any]]] = []
+        appends: list[list[Any]] = []
+
+        for member in members:
+            new_row = self._member_to_row(member)
+
+            if member.key in self._existing_ids:
+                existing_row = self._existing_rows.get(member.key, [])
+                # Only update if the managed columns changed.
+                if existing_row[: len(new_row)] != new_row:
+                    row_index = int(self._existing_ids[member.key])
+                    updates.append((row_index, new_row))
+            else:
+                appends.append(new_row)
+
+        # 1) Apply updates first (row indices are stable).
+        if updates:
+            logger.info("Updating %d existing member rows in Google Sheets", len(updates))
+            self._batch_update_rows(updates)
+
+        # 2) Append new rows at the bottom.
+        if appends:
+            logger.info("Appending %d new member rows to Google Sheets", len(appends))
+            for i in range(0, len(appends), _BATCH_UPDATE_CHUNK_ROWS):
+                chunk = appends[i : i + _BATCH_UPDATE_CHUNK_ROWS]
+                self._append_rows(self.members_sheet, chunk)
+
+        # 3) For the converted-only filter, delete rows that are no longer converted.
+        if self.members_filter == "converted" and self._existing_ids:
+            stale_row_indices = [
+                int(self._existing_ids[key])
+                for key in self._existing_ids
+                if key not in written_keys
+            ]
+            if stale_row_indices:
+                # Delete from largest to smallest so indices stay valid,
+                # but the API handles single-row deletions in one request.
+                stale_row_indices.sort(reverse=True)
+                self._delete_rows(self.members_sheet, stale_row_indices)
+
         if not members:
-            # Clear everything so the sheet does not show stale members.
-            self._clear_sheet_data(self.members_sheet, include_header=True)
             logger.info("No members to write to Google Sheets")
-            return
-
-        # Identity is now first+last name (with a new Member key column), so
-        # old email-keyed rows would never match. Replace mode keeps the sheet
-        # in sync with the current state.
-        self._clear_sheet_data(self.members_sheet, include_header=True)
-
-        rows = [self._member_to_row(member) for member in members]
-        logger.info("Writing %d member rows to Google Sheets", len(rows))
-
-        # Write the fresh header plus the data in chunks to stay below the
-        # Google Sheets API request-size limit.
-        all_rows = [MEMBER_HEADERS] + rows
-        batch_size = 1000
-        for i in range(0, len(all_rows), batch_size):
-            self._append_rows(self.members_sheet, all_rows[i : i + batch_size])
 
     def write_daily_metrics(self, metrics: DailyMetrics) -> None:
         self._find_or_create_sheet(self.metrics_sheet)
@@ -328,26 +488,41 @@ class GoogleSheetsSink(Sink):
         self._append_rows(self.metrics_sheet, values)
 
     def write_sync_run(self, summary: dict) -> None:
-        # For the simplified build, just log the summary. Google Sheets does not
-        # have a dedicated SyncRuns sheet by default.
-        logger.info("Sync run summary: %s", summary)
+        """Append a sync run record to the SyncRuns sheet."""
+        self._find_or_create_sheet("SyncRuns")
+        current_header = self._sheet_values("SyncRuns!A1:N1")
+        if not current_header or current_header[0] != SYNC_RUNS_HEADERS:
+            self._append_rows("SyncRuns", [SYNC_RUNS_HEADERS])
 
-    @staticmethod
-    def _member_to_row(member: MemberState) -> list[Any]:
-        return [
-            member.key,
-            member.email,
-            member.first_name,
-            member.last_name,
-            member.full_name,
-            member.free_status,
-            member.paid_status,
-            member.free_joined_at,
-            member.paid_joined_at,
-            member.first_seen_free_at,
-            member.first_seen_paid_at,
-            member.conversion_detected_at,
-            member.current_status,
-            json.dumps(member.membership_answers),
-            member.last_synced_at,
+        started_at = summary.get("started_at")
+        finished_at = summary.get("finished_at")
+        if isinstance(started_at, str):
+            started_at_str = started_at
+        else:
+            started_at_str = started_at.isoformat() if started_at else ""
+
+        if isinstance(finished_at, str):
+            finished_at_str = finished_at
+        else:
+            finished_at_str = finished_at.isoformat() if finished_at else ""
+
+        notes = " | ".join(summary.get("notes", [])) if isinstance(summary.get("notes"), list) else ""
+
+        row = [
+            summary.get("run_id", ""),
+            started_at_str,
+            finished_at_str,
+            summary.get("free_members_total", 0),
+            summary.get("paid_members_total", 0),
+            summary.get("new_free_members", 0),
+            summary.get("new_paid_members", 0),
+            summary.get("detected_conversions", 0),
+            summary.get("removed_free_members", 0),
+            summary.get("removed_paid_members", 0),
+            summary.get("failed_records", 0),
+            summary.get("runtime_seconds", 0.0),
+            str(summary.get("dry_run", False)),
+            notes,
         ]
+        self._append_rows("SyncRuns", [row])
+

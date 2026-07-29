@@ -158,21 +158,26 @@ def test_write_members_filtered_to_converted(
     sink = GoogleSheetsSink(settings)
 
     appended: list[list[list[Any]]] = []
-    cleared: list[str] = []
-
-    def fake_sheet_values(range_spec: str) -> list[list[Any]]:
-        return [MEMBER_HEADERS]
+    updated: list[list[tuple[int, list[Any]]]] = []
+    deleted_rows: list[list[int]] = []
 
     def fake_append_rows(sheet: str, rows: list[list[Any]]) -> None:
         appended.append(rows)
 
-    def fake_clear(sheet_name: str, include_header: bool = False) -> None:
-        cleared.append(sheet_name)
+    def fake_batch_update_rows(updates: list[tuple[int, list[Any]]]) -> None:
+        updated.append(updates)
 
-    monkeypatch.setattr(sink, "_sheet_values", fake_sheet_values)
+    def fake_delete_rows(sheet_name: str, row_indices: list[int]) -> None:
+        deleted_rows.append(row_indices)
+
     monkeypatch.setattr(sink, "_append_rows", fake_append_rows)
-    monkeypatch.setattr(sink, "_update_rows", lambda *args, **kwargs: None)
-    monkeypatch.setattr(sink, "_clear_sheet_data", fake_clear)
+    monkeypatch.setattr(sink, "_batch_update_rows", fake_batch_update_rows)
+    monkeypatch.setattr(sink, "_delete_rows", fake_delete_rows)
+
+    # Simulate that fetch_existing() has already run on an empty sheet.
+    sink._header_present = False
+    sink._existing_rows = {}
+    sink._existing_ids = {}
 
     converted_member = MemberState(email="jane@example.com", first_name="Jane", last_name="Doe")
     converted_member.current_status = "converted"
@@ -183,12 +188,13 @@ def test_write_members_filtered_to_converted(
 
     sink.write_members([converted_member, free_member, paid_member], {}, {})
 
-    assert cleared == [sink.members_sheet]
-    assert len(appended) == 1
-    written_rows = appended[0]
-    # The sink now replaces the entire sheet, starting with the header row.
-    assert written_rows[0] == MEMBER_HEADERS
-    # Data row: member key is the first column, email is the second.
-    assert written_rows[1][0] == "email:jane@example.com"
-    assert written_rows[1][1] == "jane@example.com"
-    assert written_rows[1][2] == "Jane"
+    # With no existing rows, the header and the single converted member are appended.
+    assert any(rows[0] == MEMBER_HEADERS for rows in appended)
+    data_appends = [rows for rows in appended if rows[0] != MEMBER_HEADERS]
+    assert len(data_appends) == 1
+    assert len(data_appends[0]) == 1
+    assert data_appends[0][0][0] == "email:jane@example.com"
+    assert data_appends[0][0][1] == "jane@example.com"
+    assert data_appends[0][0][2] == "Jane"
+    assert not updated
+    assert not deleted_rows
