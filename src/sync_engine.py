@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import json
 import logging
 from pathlib import Path
@@ -162,6 +163,8 @@ class SyncEngine:
                     full_name=representative.full_name if representative else "",
                 )
             else:
+                # Deep copy so metrics can compare the old state against the new one.
+                state = copy.deepcopy(state)
                 # Update name fields if the member's name changed.
                 if representative:
                     if representative.first_name:
