@@ -15,6 +15,16 @@ Production-ready automation that exports members from your **free** and **paid**
 
 The easiest way to set up the sync is with the included Streamlit wizard.
 
+### 1. Install dependencies
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+```
+
+### 2. Run the wizard
+
 ```bash
 streamlit run scripts/setup_wizard.py
 ```
@@ -80,7 +90,7 @@ It will ask for:
 - Google Sheets spreadsheet ID or URL
 - Whether to schedule a daily sync
 
-### 3. Authorize access to your Google Sheet
+### 4. Authorize access to your Google Sheet
 
 - **If you chose service account:** open `data/credentials.json`, find `client_email`, and share your Google Sheet with that email as an **Editor**.
 - **If you chose OAuth client:** run the one-time authorization. This opens a browser:
@@ -97,13 +107,13 @@ It will ask for:
 
   > **Heads-up:** the `--console` flow uses a deprecated Google redirect URI that may not work with newly created OAuth clients. If it fails, run `python scripts/google_auth.py` on a machine with a browser and copy the generated `data/google_oauth_token.json` to your server.
 
-### 4. Test without writing anything
+### 5. Test without writing anything
 
 ```bash
 python -m src.main --dry-run
 ```
 
-### 5. Run the real sync
+### 6. Run the real sync
 
 ```bash
 python -m src.main
