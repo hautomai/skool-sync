@@ -185,6 +185,7 @@ All configuration is loaded from `.env`. The easiest way to create `.env` is `py
 
 - You must be an admin of both Skool communities.
 - Skool does not expose a public member API, so this tool uses the third-party `cristiantala/skool-all-in-one-api` Apify actor to export members.
+- **Member matching is done by first name + last name. Email addresses are not present in the Skool member export, so they are not used for matching.** If Skool ever adds email to the export, the code will use it as a confirming fallback.
 - Google Sheets works well for the expected scale (tens of thousands of free members, a few thousand paid members). If you later need a database or dashboard, the sink layer can be extended.
 - Apify actor availability and pricing are controlled by Apify and the actor author.
 
