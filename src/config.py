@@ -44,6 +44,10 @@ class Settings(BaseSettings):
     apify_api_token: str = ""
     apify_actor_id: str = "cristiantala/skool-all-in-one-api"
 
+    # Skool cookie caching (used by the Apify actor)
+    skool_cookies_path: Path = Path("./data/skool_cookies.json")
+    skool_cookies_refresh_hours: int = 24
+
     # Local paths
     download_dir: Path = Path("./data/raw")
     processed_dir: Path = Path("./data/processed")

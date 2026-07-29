@@ -8,13 +8,16 @@ a CSV that the rest of the pipeline (csv_parser / normalizer) can consume.
 from __future__ import annotations
 
 import logging
+from datetime import datetime
 from pathlib import Path
+from typing import Any
 from urllib.parse import urlparse
 
 import pandas as pd
 from apify_client import ApifyClientAsync
 
 from ..config import Settings
+from ..cookie_manager import SkoolCookieManager
 from .base import SkoolExporter
 
 logger = logging.getLogger("skool_sync")
@@ -41,6 +44,10 @@ class ApifySkoolExporter(SkoolExporter):
             raise ValueError("APIFY_API_TOKEN is not set.")
         self._client = ApifyClientAsync(self.settings.apify_api_token)
         self.actor_id = self.settings.apify_actor_id or "cristiantala/skool-all-in-one-api"
+        self._cookie_manager = SkoolCookieManager(
+            self.settings.skool_cookies_path,
+            refresh_hours=self.settings.skool_cookies_refresh_hours,
+        )
 
     @staticmethod
     def _group_slug_from_url(community_url: str) -> str:
@@ -65,6 +72,77 @@ class ApifySkoolExporter(SkoolExporter):
         }
         return mapping.get(key, key)
 
+    async def _run_actor(self, run_input: dict) -> Any:
+        """Call the Apify actor and return the raw run object."""
+        logger.info("Calling Apify actor %s with action=%s", self.actor_id, run_input.get("action"))
+        return await self._client.actor(self.actor_id).call(run_input=run_input)
+
+    async def _fetch_dataset_items(self, dataset_id: str) -> list[Any]:
+        """Fetch all items from a dataset."""
+        logger.info("Fetching dataset %s", dataset_id)
+        dataset = await self._client.dataset(dataset_id).list_items()
+        if hasattr(dataset, "items"):
+            return dataset.items
+        if isinstance(dataset, dict):
+            return dataset.get("items", [])
+        return []
+
+    async def _login_with_cookies(self) -> list[dict[str, Any]] | None:
+        """Call auth:login and cache the returned cookies.
+
+        Raises RuntimeError if the actor reports a login failure.
+        """
+        logger.info("Refreshing Skool session cookies via auth:login")
+        run = await self._run_actor(
+            {
+                "action": "auth:login",
+                "email": self.settings.skool_email,
+                "password": self.settings.skool_password,
+            }
+        )
+        dataset_id = self._extract_dataset_id(run)
+        if not dataset_id:
+            return None
+
+        for item in await self._fetch_dataset_items(dataset_id):
+            if not isinstance(item, dict):
+                item = item.model_dump() if hasattr(item, "model_dump") else dict(item)
+
+            if item.get("success") is False:
+                raise RuntimeError(
+                    f"Skool auth:login failed: {item.get('message', item)}"
+                )
+
+            if "cookies" in item:
+                # Use the actor-reported expiry if available, otherwise rely on
+                # the configured refresh window.
+                expires_at: int | None = None
+                raw_expires = item.get("expiresAt")
+                if isinstance(raw_expires, (int, float)):
+                    expires_at = int(raw_expires)
+                elif isinstance(raw_expires, str):
+                    try:
+                        expires_dt = datetime.fromisoformat(raw_expires.replace("Z", "+00:00"))
+                        expires_at = int(expires_dt.timestamp())
+                    except ValueError:
+                        expires_at = None
+
+                cookies = item["cookies"]
+                self._cookie_manager.save(cookies, expires_at=expires_at)
+                return cookies
+
+        logger.warning("auth:login did not return cookies")
+        return None
+
+    @staticmethod
+    def _extract_dataset_id(run: Any) -> str | None:
+        """Return the default dataset id from an Apify run response."""
+        if hasattr(run, "default_dataset_id"):
+            return run.default_dataset_id
+        if hasattr(run, "get"):
+            return run.get("defaultDatasetId")
+        return getattr(run, "defaultDatasetId", None)
+
     async def export_members(
         self,
         community_url: str,
@@ -76,45 +154,59 @@ class ApifySkoolExporter(SkoolExporter):
         run_input: dict = {
             "action": "members:list",
             "groupSlug": group_slug,
-            "email": self.settings.skool_email,
-            "password": self.settings.skool_password,
             "params": {"all": True},
         }
 
-        logger.info("Calling Apify actor %s for groupSlug=%s", self.actor_id, group_slug)
-        run = await self._client.actor(self.actor_id).call(run_input=run_input)
-
-        # The async Apify client may return a Pydantic model or a dict.
-        if hasattr(run, "default_dataset_id"):
-            dataset_id = run.default_dataset_id
-        elif hasattr(run, "get"):
-            dataset_id = run.get("defaultDatasetId")
+        # Try cached cookies first, otherwise obtain fresh ones, otherwise fall
+        # back to sending the email/password directly.
+        cookies = self._cookie_manager.load()
+        if cookies:
+            run_input["cookies"] = cookies
+        elif self.settings.skool_email and self.settings.skool_password:
+            fresh_cookies = await self._login_with_cookies()
+            if fresh_cookies:
+                run_input["cookies"] = fresh_cookies
+            else:
+                run_input["email"] = self.settings.skool_email
+                run_input["password"] = self.settings.skool_password
         else:
-            dataset_id = getattr(run, "defaultDatasetId", None)
+            raise ValueError("No cached Skool cookies and SKOOL_EMAIL/SKOOL_PASSWORD are not set.")
+
+        run = await self._run_actor(run_input)
+        dataset_id = self._extract_dataset_id(run)
         if not dataset_id:
             raise RuntimeError(f"Apify actor run returned no dataset. Run: {run}")
 
-        logger.info("Fetching dataset %s", dataset_id)
-        dataset = await self._client.dataset(dataset_id).list_items()
+        items = await self._fetch_dataset_items(dataset_id)
 
-        # dataset may be a Pydantic model or a dict.
-        if hasattr(dataset, "items"):
-            items = dataset.items
-        elif isinstance(dataset, dict):
-            items = dataset.get("items", [])
-        else:
-            items = []
+        # If every item is an auth failure and we used cookies, the cached
+        # session is probably stale. Refresh once and retry.
+        if run_input.get("cookies") and self._all_items_are_auth_failures(items):
+            logger.warning("members:list failed with cached cookies; refreshing and retrying")
+            self._cookie_manager.clear()
+            fresh_cookies = await self._login_with_cookies()
+            if fresh_cookies:
+                run_input["cookies"] = fresh_cookies
+                # Remove credentials fallback if it was added.
+                run_input.pop("email", None)
+                run_input.pop("password", None)
+            else:
+                run_input["email"] = self.settings.skool_email
+                run_input["password"] = self.settings.skool_password
+
+            run = await self._run_actor(run_input)
+            dataset_id = self._extract_dataset_id(run)
+            if not dataset_id:
+                raise RuntimeError(f"Apify actor run returned no dataset. Run: {run}")
+            items = await self._fetch_dataset_items(dataset_id)
 
         records: list[dict] = []
         for item in items:
-            # The actor uses a "never throw" pattern and returns success: false
-            # payloads on failures.
             if isinstance(item, dict) and item.get("success") is False:
                 logger.warning("Apify actor returned failure item: %s", item)
                 continue
 
             mapped: dict = {}
-            # item may be a Pydantic model; convert it to a dict if needed.
             if not isinstance(item, dict):
                 item = item.model_dump() if hasattr(item, "model_dump") else dict(item)
             for key, value in item.items():
@@ -129,6 +221,17 @@ class ApifySkoolExporter(SkoolExporter):
         pd.DataFrame(records).to_csv(output_path, index=False)
         logger.info("Exported %d members via Apify to %s", len(records), output_path)
         return output_path
+
+    @staticmethod
+    def _all_items_are_auth_failures(items: list[Any]) -> bool:
+        """Return True when all dataset items are explicit auth/permission failures."""
+        if not items:
+            return False
+        for item in items:
+            if isinstance(item, dict) and item.get("success") is False:
+                continue
+            return False
+        return True
 
     async def close(self) -> None:
         return None
