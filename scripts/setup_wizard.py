@@ -56,8 +56,12 @@ OAUTH_TIMEOUT_SECONDS = 300
 def _prefill_from_env() -> dict[str, str]:
     """Return a mapping of env keys to values from .env, if any."""
     env = _read_env()
+    creds_path = env.get("GOOGLE_SHEETS_CREDENTIALS_PATH", "./data/credentials.json")
+    has_sa = bool(creds_path) and Path(creds_path).is_file()
     return {
         "apify_token": env.get("APIFY_API_TOKEN", ""),
+        "google_auth_method": env.get("GOOGLE_AUTH_METHOD", "service_account" if has_sa else "oauth"),
+        "google_sheets_credentials_path": creds_path,
         "google_client_id": env.get("GOOGLE_CLIENT_ID", ""),
         "google_client_secret": env.get("GOOGLE_CLIENT_SECRET", ""),
         "google_refresh_token": env.get("GOOGLE_REFRESH_TOKEN", ""),
@@ -75,6 +79,8 @@ def _init_state() -> None:
     defaults = {
         "apify_token": env_defaults["apify_token"],
         "apify_verified": bool(env_defaults["apify_token"]),
+        "google_auth_method": env_defaults["google_auth_method"],
+        "google_sheets_credentials_path": env_defaults["google_sheets_credentials_path"],
         "google_client_id": env_defaults["google_client_id"],
         "google_client_secret": env_defaults["google_client_secret"],
         "google_refresh_token": env_defaults["google_refresh_token"],
@@ -135,6 +141,8 @@ def _write_env(config: dict[str, str]) -> None:
         "FREE_COMMUNITY_URL",
         "PAID_COMMUNITY_URL",
         "GOOGLE_SHEETS_SPREADSHEET_ID",
+        "GOOGLE_AUTH_METHOD",
+        "GOOGLE_SHEETS_CREDENTIALS_PATH",
         "GOOGLE_CLIENT_ID",
         "GOOGLE_CLIENT_SECRET",
         "GOOGLE_REFRESH_TOKEN",
@@ -167,7 +175,11 @@ def _write_env(config: dict[str, str]) -> None:
         "GOOGLE_SHEETS_DAILY_METRICS_SHEET=DailyMetrics",
         f"GOOGLE_SHEETS_MEMBERS_FILTER={merged['GOOGLE_SHEETS_MEMBERS_FILTER']}",
         "",
-        "# Google OAuth credentials",
+        "# Google Sheets authentication method: 'service_account' or 'oauth'",
+        f"GOOGLE_AUTH_METHOD={merged['GOOGLE_AUTH_METHOD']}",
+        f"GOOGLE_SHEETS_CREDENTIALS_PATH={merged['GOOGLE_SHEETS_CREDENTIALS_PATH']}",
+        "",
+        "# Google OAuth credentials (only used when GOOGLE_AUTH_METHOD=oauth)",
         f"GOOGLE_CLIENT_ID={merged['GOOGLE_CLIENT_ID']}",
         f"GOOGLE_CLIENT_SECRET={merged['GOOGLE_CLIENT_SECRET']}",
         f"GOOGLE_REFRESH_TOKEN={merged['GOOGLE_REFRESH_TOKEN']}",
@@ -293,20 +305,35 @@ def _extract_spreadsheet_id(value: str) -> str:
     return value
 
 
-def _verify_google_sheet_access(client_id: str, client_secret: str, refresh_token: str, spreadsheet_id: str) -> tuple[bool, str]:
-    from google.oauth2.credentials import Credentials as OAuthCredentials
-    from google.auth.transport.requests import Request
-
+def _verify_google_sheet_access(
+    spreadsheet_id: str,
+    *,
+    client_id: str = "",
+    client_secret: str = "",
+    refresh_token: str = "",
+    service_account_path: str = "",
+) -> tuple[bool, str]:
     try:
-        creds = OAuthCredentials(
-            token=None,
-            refresh_token=refresh_token,
-            token_uri="https://oauth2.googleapis.com/token",
-            client_id=client_id,
-            client_secret=client_secret,
-            scopes=SCOPES,
-        )
-        creds.refresh(Request())
+        if service_account_path:
+            from google.oauth2.service_account import Credentials as ServiceAccountCredentials
+
+            creds = ServiceAccountCredentials.from_service_account_file(
+                service_account_path, scopes=SCOPES
+            )
+        else:
+            from google.oauth2.credentials import Credentials as OAuthCredentials
+            from google.auth.transport.requests import Request
+
+            creds = OAuthCredentials(
+                token=None,
+                refresh_token=refresh_token,
+                token_uri="https://oauth2.googleapis.com/token",
+                client_id=client_id,
+                client_secret=client_secret,
+                scopes=SCOPES,
+            )
+            creds.refresh(Request())
+
         service = build("sheets", "v4", credentials=creds)
         service.spreadsheets().get(spreadsheetId=spreadsheet_id).execute()
         return True, "Spreadsheet accessible"
@@ -396,73 +423,148 @@ def _step_apify() -> None:
 
 def _step_google() -> None:
     st.header("2. Connect Google Sheets")
-    st.markdown(
-        "Create a Google OAuth 2.0 client (Desktop app) in Google Cloud, "
-        "enable the Google Sheets API, and paste the credentials below."
+
+    auth_method = st.radio(
+        "Authentication method",
+        options=["service_account", "oauth"],
+        index=0 if st.session_state["google_auth_method"] == "service_account" else 1,
+        format_func=lambda x: "Service account (recommended)" if x == "service_account" else "OAuth 2.0",
+        key="google_auth_method_input",
+        help=(
+            "Service account is recommended for automation: the JSON key stays valid "
+            "until the key is deleted, so there are no refresh tokens that can expire. "
+            "OAuth 2.0 is easier for a quick test, but the refresh token may expire, "
+            "especially for unpublished Google Cloud apps."
+        ),
+    )
+    st.session_state["google_auth_method"] = auth_method
+
+    st.info(
+        "**Tip:** Service accounts are simpler for daily automation because they avoid "
+        "OAuth refresh-token expiry. With OAuth, unpublished apps can lose access after "
+        "~7 days and require re-authorization."
     )
 
-    client_id = st.text_input("Google Client ID", value=st.session_state["google_client_id"], key="google_client_id_input")
-    client_secret = st.text_input(
-        "Google Client Secret",
-        value=st.session_state["google_client_secret"],
-        type="password",
-        key="google_client_secret_input",
-    )
-    st.session_state["google_client_id"] = client_id
-    st.session_state["google_client_secret"] = client_secret
+    client_id = ""
+    client_secret = ""
+    service_account_path = ""
 
-    if not st.session_state["google_token_ready"]:
-        if st.button("Authorize Google"):
-            if not (client_id and client_secret):
-                st.warning("Enter both Client ID and Client Secret first.")
-            else:
-                # Start local callback server.
-                server_thread = _start_oauth_server()
+    if auth_method == "service_account":
+        st.markdown(
+            "Upload the service-account JSON key from Google Cloud, then share your "
+            "spreadsheet with the service-account email as an **Editor**."
+        )
+        uploaded = st.file_uploader(
+            "Service account JSON key",
+            type=["json"],
+            key="service_account_json_uploader",
+        )
+        if uploaded is not None:
+            try:
+                sa_info = json.loads(uploaded.getvalue())
+                sa_email = sa_info.get("client_email", "")
+                sa_private_key = sa_info.get("private_key", "")
+                sa_type = sa_info.get("type", "")
+                if sa_type != "service_account" or not sa_email or not sa_private_key:
+                    st.error("The uploaded file does not look like a valid Google service-account key (missing type='service_account', client_email, or private_key).")
+                    sa_info = {}
+                    uploaded = None  # type: ignore[assignment]
+                if uploaded is not None:
+                    data_dir = PROJECT_ROOT / "data"
+                    data_dir.mkdir(parents=True, exist_ok=True)
+                    creds_path = data_dir / "credentials.json"
+                    creds_path.write_bytes(uploaded.getvalue())
+                    st.session_state["google_sheets_credentials_path"] = str(creds_path)
+                    service_account_path = str(creds_path)
+                    st.success(f"Service account JSON saved. Share the sheet with: `{sa_email}`")
+            except json.JSONDecodeError:
+                st.error("The uploaded file is not valid JSON.")
 
-                # Create a single Flow instance and store its PKCE code verifier.
-                # We only keep the verifier (not the whole Flow) because Streamlit
-                # session_state may not serialize arbitrary objects reliably.
-                flow = _create_flow(client_id, client_secret)
-                auth_url = _get_authorization_url(flow)
-                st.session_state["google_code_verifier"] = flow.code_verifier
-
-                st.info("A browser tab will open for Google authorization. Return here when done.")
-                webbrowser.open(auth_url)
-
-                # Poll for the OAuth code from the callback server.
-                import time as _time
-                oauth_start = _time.monotonic()
-                with st.spinner("Waiting for Google authorization..."):
-                    while _OAuthCallbackHandler.last_code is None:
-                        if _time.monotonic() - oauth_start > OAUTH_TIMEOUT_SECONDS:
-                            server_thread.server.shutdown()  # type: ignore[attr-defined]
-                            st.error("Google authorization timed out after 5 minutes. Please try again.")
-                            return
-                        _time.sleep(0.5)
-
-                code = _OAuthCallbackHandler.last_code
-                _OAuthCallbackHandler.last_code = None
-                server_thread.server.shutdown()  # type: ignore[attr-defined]
-
-                try:
-                    code_verifier = st.session_state.get("google_code_verifier")
-                    if not code_verifier:
-                        st.error("OAuth code verifier was lost. Please try authorizing again.")
-                        return
-                    creds = _exchange_code_for_credentials(client_id, client_secret, code, code_verifier)
-                    refresh_token = creds.refresh_token or ""
-                    if not refresh_token:
-                        st.error("Google did not return a refresh token. Make sure you checked 'prompt=consent' and are not re-using an existing authorization without it.")
-                        return
-                    st.session_state["google_token_ready"] = True
-                    st.session_state["google_refresh_token"] = refresh_token
-                    # Clear the verifier now that we have the refresh token.
-                    st.session_state.pop("google_code_verifier", None)
-                    st.success("Google Sheets authorized!")
-                except Exception as exc:
-                    st.error(f"OAuth failed: {exc}")
+        existing_path = Path(st.session_state["google_sheets_credentials_path"])
+        if not service_account_path and existing_path.is_file():
+            service_account_path = str(existing_path)
+            st.caption(f"Using existing service account key: `{existing_path}`")
     else:
-        st.success("Google Sheets is connected.")
+        st.markdown(
+            "Create a Google OAuth 2.0 client (Desktop app) in Google Cloud, "
+            "enable the Google Sheets API, and paste the credentials below."
+        )
+        # If a service-account key file exists from a previous setup, warn that it
+        # will still be used unless GOOGLE_AUTH_METHOD is set to oauth (which it
+        # will be after saving) or the file is removed.
+        existing_sa = Path(st.session_state["google_sheets_credentials_path"])
+        if existing_sa.is_file():
+            st.warning(
+                f"A service-account key still exists at `{existing_sa}`. "
+                "Because you selected OAuth, it will be ignored after you save. "
+                "If you ever switch back to service account, this file will be reused."
+            )
+        client_id = st.text_input(
+            "Google Client ID",
+            value=st.session_state["google_client_id"],
+            key="google_client_id_input",
+        )
+        client_secret = st.text_input(
+            "Google Client Secret",
+            value=st.session_state["google_client_secret"],
+            type="password",
+            key="google_client_secret_input",
+        )
+        st.session_state["google_client_id"] = client_id
+        st.session_state["google_client_secret"] = client_secret
+
+        if not st.session_state["google_token_ready"]:
+            if st.button("Authorize Google"):
+                if not (client_id and client_secret):
+                    st.warning("Enter both Client ID and Client Secret first.")
+                else:
+                    # Start local callback server.
+                    server_thread = _start_oauth_server()
+
+                    # Create a single Flow instance and store its PKCE code verifier.
+                    # We only keep the verifier (not the whole Flow) because Streamlit
+                    # session_state may not serialize arbitrary objects reliably.
+                    flow = _create_flow(client_id, client_secret)
+                    auth_url = _get_authorization_url(flow)
+                    st.session_state["google_code_verifier"] = flow.code_verifier
+
+                    st.info("A browser tab will open for Google authorization. Return here when done.")
+                    webbrowser.open(auth_url)
+
+                    # Poll for the OAuth code from the callback server.
+                    import time as _time
+                    oauth_start = _time.monotonic()
+                    with st.spinner("Waiting for Google authorization..."):
+                        while _OAuthCallbackHandler.last_code is None:
+                            if _time.monotonic() - oauth_start > OAUTH_TIMEOUT_SECONDS:
+                                server_thread.server.shutdown()  # type: ignore[attr-defined]
+                                st.error("Google authorization timed out after 5 minutes. Please try again.")
+                                return
+                            _time.sleep(0.5)
+
+                    code = _OAuthCallbackHandler.last_code
+                    _OAuthCallbackHandler.last_code = None
+                    server_thread.server.shutdown()  # type: ignore[attr-defined]
+
+                    try:
+                        code_verifier = st.session_state.get("google_code_verifier")
+                        if not code_verifier:
+                            st.error("OAuth code verifier was lost. Please try authorizing again.")
+                            return
+                        creds = _exchange_code_for_credentials(client_id, client_secret, code, code_verifier)
+                        refresh_token = creds.refresh_token or ""
+                        if not refresh_token:
+                            st.error("Google did not return a refresh token. Make sure you checked 'prompt=consent' and are not re-using an existing authorization without it.")
+                            return
+                        st.session_state["google_token_ready"] = True
+                        st.session_state["google_refresh_token"] = refresh_token
+                        # Clear the verifier now that we have the refresh token.
+                        st.session_state.pop("google_code_verifier", None)
+                        st.success("Google Sheets authorized!")
+                    except Exception as exc:
+                        st.error(f"OAuth failed: {exc}")
+        else:
+            st.success("Google Sheets is connected via OAuth.")
 
     spreadsheet_input = st.text_input(
         "Google Sheet URL or Spreadsheet ID",
@@ -471,21 +573,31 @@ def _step_google() -> None:
     )
     st.session_state["spreadsheet_id"] = _extract_spreadsheet_id(spreadsheet_input)
 
-    if st.session_state["google_token_ready"] and st.session_state["spreadsheet_id"]:
-        if st.button("Verify sheet access"):
-            ok, msg = _verify_google_sheet_access(
-                st.session_state["google_client_id"],
-                st.session_state["google_client_secret"],
-                st.session_state["google_refresh_token"],
-                st.session_state["spreadsheet_id"],
-            )
+    if st.session_state["spreadsheet_id"]:
+        ready = bool(service_account_path) or st.session_state["google_token_ready"]
+        if ready and st.button("Verify sheet access"):
+            if auth_method == "service_account":
+                ok, msg = _verify_google_sheet_access(
+                    st.session_state["spreadsheet_id"],
+                    service_account_path=service_account_path,
+                )
+            else:
+                ok, msg = _verify_google_sheet_access(
+                    st.session_state["spreadsheet_id"],
+                    client_id=st.session_state["google_client_id"],
+                    client_secret=st.session_state["google_client_secret"],
+                    refresh_token=st.session_state["google_refresh_token"],
+                )
             if ok:
                 st.session_state["google_sheet_verified"] = True
                 st.success("Google Sheet is accessible!")
             else:
                 st.session_state["google_sheet_verified"] = False
                 st.error(f"Cannot access the spreadsheet: {msg}")
-                st.info("Make sure the Google Sheets API is enabled and your Google account is added as a test user in Google Cloud.")
+                if auth_method == "service_account":
+                    st.info("Make sure the spreadsheet is shared with the service-account email as an Editor and that the Google Sheets API is enabled.")
+                else:
+                    st.info("Make sure the Google Sheets API is enabled and your Google account is added as a test user in Google Cloud.")
 
         next_clicked = st.button("Next", type="primary")
         if next_clicked and not st.session_state["google_sheet_verified"]:
@@ -566,6 +678,7 @@ def _step_review() -> None:
     st.write(f"**Members filter:** {st.session_state['members_filter']}")
 
     if st.button("Save .env", type="primary"):
+        is_service_account = st.session_state["google_auth_method"] == "service_account"
         config: dict[str, str] = {
             "APIFY_API_TOKEN": st.session_state["apify_token"],
             "SKOOL_EMAIL": st.session_state["skool_email"],
@@ -573,8 +686,10 @@ def _step_review() -> None:
             "FREE_COMMUNITY_URL": st.session_state["free_community_url"],
             "PAID_COMMUNITY_URL": st.session_state["paid_community_url"],
             "GOOGLE_SHEETS_SPREADSHEET_ID": st.session_state["spreadsheet_id"],
-            "GOOGLE_CLIENT_ID": st.session_state["google_client_id"],
-            "GOOGLE_CLIENT_SECRET": st.session_state["google_client_secret"],
+            "GOOGLE_AUTH_METHOD": st.session_state["google_auth_method"],
+            "GOOGLE_SHEETS_CREDENTIALS_PATH": st.session_state["google_sheets_credentials_path"] if is_service_account else "",
+            "GOOGLE_CLIENT_ID": st.session_state["google_client_id"] if not is_service_account else "",
+            "GOOGLE_CLIENT_SECRET": st.session_state["google_client_secret"] if not is_service_account else "",
             "GOOGLE_REFRESH_TOKEN": st.session_state.get("google_refresh_token", ""),
             "GOOGLE_OAUTH_TOKEN_PATH": "./data/google_oauth_token.json",
             "GOOGLE_SHEETS_MEMBERS_FILTER": st.session_state["members_filter"],

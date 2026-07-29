@@ -22,7 +22,7 @@ streamlit run scripts/setup_wizard.py
 Then follow the steps:
 
 1. **Connect Apify** — paste your Apify API token and verify it.
-2. **Connect Google Sheets** — enter your Google OAuth Client ID/Secret, click authorize, and verify the target spreadsheet.
+2. **Connect Google Sheets** — choose **Service account** (recommended) or **OAuth 2.0**, provide the credentials, and verify the target spreadsheet.
 3. **Connect Skool** — enter your Skool admin email, password, and the free/paid community URLs.
 4. **Review & Save** — the wizard writes your `.env` file and installs a daily cron job.
 5. **Run first sync** — click the button to test everything end-to-end.
@@ -48,22 +48,16 @@ You can authenticate with either:
 - **Service account (recommended for automation):** a JSON key file shared with the sheet.
 - **OAuth 2.0 client:** `GOOGLE_CLIENT_ID` + `GOOGLE_CLIENT_SECRET`; you authorize once and the app stores a refresh token.
 
+> **Why service account?** Service-account keys do not use refresh tokens, so they never expire on their own. OAuth 2.0 refresh tokens for unpublished apps can stop working after ~7 days and may need re-authorization.
+
 #### Service account (recommended)
 
 1. Go to the [Google Cloud Console](https://console.cloud.google.com/).
 2. Create a project (or pick an existing one).
 3. Navigate to **IAM & Admin > Service accounts** and create a service account.
 4. Under **Keys**, add a new JSON key and download the `.json` file.
-5. Keep the file safe — you will pass its path to the setup script below.
-
-#### OAuth 2.0 client
-
-1. In the [Google Cloud Console](https://console.cloud.google.com/), go to **APIs & Services > Credentials**.
-2. Click **Create credentials > OAuth client ID** and choose **Desktop app** (the `--console` flow requires a Desktop app client).
-3. Copy the **Client ID** and **Client secret**.
-4. Make sure the **Google Sheets API** is enabled and your Google account is added as a test user if the app is not published.
-
-> **Note:** A **Web application** OAuth client will not work with `python scripts/google_auth.py --console`; use a Desktop app client instead.
+5. Open the `.json` file, find the `client_email`, and share your Google Sheet with that email as an **Editor**.
+6. Keep the file safe — you will pass its path to the setup script below.
 
 ### 2. Install
 

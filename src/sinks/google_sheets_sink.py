@@ -112,17 +112,29 @@ class GoogleSheetsSink(Sink):
 
     def _load_credentials(self) -> Any:
         """Return valid Google credentials using service account or OAuth."""
-        # Prefer service account if a real JSON key file exists.
+        auth_method = self.settings.google_auth_method.lower()
         creds_path = Path(self.settings.google_sheets_credentials_path)
-        if creds_path.is_file():
+
+        # Service account is explicitly requested and the JSON key exists.
+        if auth_method == "service_account" and creds_path.is_file():
             logger.debug("Using service account credentials from %s", creds_path)
             return ServiceAccountCredentials.from_service_account_file(
                 str(creds_path), scopes=SCOPES
             )
 
-        # Fall back to OAuth 2.0 client credentials.
+        # OAuth is explicitly requested; use client credentials/refresh token.
         client_id = self.settings.google_client_id
         client_secret = self.settings.google_client_secret
+        if auth_method == "oauth" and client_id and client_secret:
+            return self._load_oauth_credentials(client_id, client_secret)
+
+        # Backward compatibility: if no explicit auth method is set, prefer a
+        # present service-account key file, otherwise fall back to OAuth.
+        if creds_path.is_file():
+            logger.debug("Using service account credentials from %s", creds_path)
+            return ServiceAccountCredentials.from_service_account_file(
+                str(creds_path), scopes=SCOPES
+            )
         if client_id and client_secret:
             return self._load_oauth_credentials(client_id, client_secret)
 

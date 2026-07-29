@@ -27,6 +27,7 @@ class Settings(BaseSettings):
     paid_community_url: str
 
     # Google Sheets (the only supported sink in this simplified build)
+    google_auth_method: str = "oauth"  # "service_account" or "oauth"
     google_sheets_credentials_path: Path = Path("./data/credentials.json")
     google_sheets_spreadsheet_id: str = ""
     google_sheets_members_sheet: str = "Members"
