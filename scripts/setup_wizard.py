@@ -258,16 +258,23 @@ def _client_config(client_id: str, client_secret: str) -> dict:
     }
 
 
-def _get_authorization_url(client_id: str, client_secret: str) -> str:
+def _create_flow(client_id: str, client_secret: str) -> Flow:
+    """Create a Google OAuth flow for a Desktop app (installed client)."""
     flow = Flow.from_client_config(_client_config(client_id, client_secret), scopes=SCOPES)
     flow.redirect_uri = OAUTH_REDIRECT_URI
+    return flow
+
+
+def _get_authorization_url(flow: Flow) -> str:
+    """Generate the authorization URL from an existing flow (keeps PKCE verifier)."""
     auth_url, _ = flow.authorization_url(prompt="consent")
     return auth_url
 
 
-def _exchange_code_for_credentials(client_id: str, client_secret: str, code: str):
-    flow = Flow.from_client_config(_client_config(client_id, client_secret), scopes=SCOPES)
-    flow.redirect_uri = OAUTH_REDIRECT_URI
+def _exchange_code_for_credentials(client_id: str, client_secret: str, code: str, code_verifier: str):
+    """Exchange the authorization code, restoring the PKCE verifier."""
+    flow = _create_flow(client_id, client_secret)
+    flow.code_verifier = code_verifier
     flow.fetch_token(code=code)
     return flow.credentials
 
@@ -407,7 +414,14 @@ def _step_google() -> None:
             else:
                 # Start local callback server.
                 server_thread = _start_oauth_server()
-                auth_url = _get_authorization_url(client_id, client_secret)
+
+                # Create a single Flow instance and store its PKCE code verifier.
+                # We only keep the verifier (not the whole Flow) because Streamlit
+                # session_state may not serialize arbitrary objects reliably.
+                flow = _create_flow(client_id, client_secret)
+                auth_url = _get_authorization_url(flow)
+                st.session_state["google_code_verifier"] = flow.code_verifier
+
                 st.info("A browser tab will open for Google authorization. Return here when done.")
                 webbrowser.open(auth_url)
 
@@ -427,13 +441,19 @@ def _step_google() -> None:
                 server_thread.server.shutdown()  # type: ignore[attr-defined]
 
                 try:
-                    creds = _exchange_code_for_credentials(client_id, client_secret, code)
+                    code_verifier = st.session_state.get("google_code_verifier")
+                    if not code_verifier:
+                        st.error("OAuth code verifier was lost. Please try authorizing again.")
+                        return
+                    creds = _exchange_code_for_credentials(client_id, client_secret, code, code_verifier)
                     refresh_token = creds.refresh_token or ""
                     if not refresh_token:
                         st.error("Google did not return a refresh token. Make sure you checked 'prompt=consent' and are not re-using an existing authorization without it.")
                         return
                     st.session_state["google_token_ready"] = True
                     st.session_state["google_refresh_token"] = refresh_token
+                    # Clear the verifier now that we have the refresh token.
+                    st.session_state.pop("google_code_verifier", None)
                     st.success("Google Sheets authorized!")
                 except Exception as exc:
                     st.error(f"OAuth failed: {exc}")
