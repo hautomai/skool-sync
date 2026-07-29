@@ -69,15 +69,16 @@ def safe_filename(name: str) -> str:
 def generate_key(email: str = "", first_name: str = "", last_name: str = "") -> str:
     """Stable identity key for a member.
 
-    Prefer email when available (it is unique and survives name changes).
-    Fall back to a normalized first_name|last_name key when email is absent.
+    Prefer a normalized first_name|last_name key (matches Skool CSV output).
+    Fall back to email: when names are missing so members without names can
+    still be tracked.
     """
+    key = f"{first_name.strip().lower()}|{last_name.strip().lower()}"
+    if key != "|":
+        return key
     clean_email = email.strip().lower()
     if clean_email:
         return f"email:{clean_email}"
-    key = f"{first_name.strip().lower()}|{last_name.strip().lower()}"
-    if key == "|":
-        return ""
-    return key
+    return ""
 
 

@@ -78,26 +78,49 @@ def test_members_without_email_are_matched_by_name():
         full_name="NoEmail Person",
     )
     states = engine._compute_new_states({}, [member_with_email, member_without_email], [])
-    assert "email:john@example.com" in states
+    assert "john|doe" in states
     assert "noemail|person" in states
     assert "" not in states
 
 
-def test_email_fallback_links_records_across_name_changes():
+def test_email_fallback_links_records_when_names_missing():
     settings = Settings(
         free_community_url="https://www.skool.com/free",
         paid_community_url="https://www.skool.com/paid",
     )
     engine = SyncEngine(settings, sink=DummySink(), exporter=DummySkoolExporter())
 
-    free_member = _member("Jane", "Doe", CommunityType.FREE, "2024-01-01", email="jane@example.com")
+    # Members with no names but the same email should be linked via the email fallback.
+    free_member = Member(
+        email="jane@example.com",
+        community_type=CommunityType.FREE,
+        community_name="Free",
+        community_slug="free",
+        source_file="free.csv",
+        imported_at=datetime.now(timezone.utc),
+        snapshot_date="2024-01-01",
+        first_name="",
+        last_name="",
+        full_name="",
+    )
+    paid_member = Member(
+        email="jane@example.com",
+        community_type=CommunityType.PAID,
+        community_name="Paid",
+        community_slug="paid",
+        source_file="paid.csv",
+        imported_at=datetime.now(timezone.utc),
+        snapshot_date="2024-01-05",
+        first_name="",
+        last_name="",
+        full_name="",
+    )
+
     states = engine._compute_new_states({}, [free_member], [])
     assert states["email:jane@example.com"].email == "jane@example.com"
+    assert states["email:jane@example.com"].current_status == "free_only"
 
-    # Same email, different name: the historical state should be found by email.
-    paid_member = _member("Jane", "Smith", CommunityType.PAID, "2024-01-05", email="jane@example.com")
     states = engine._compute_new_states(states, [], [paid_member])
-
     assert "email:jane@example.com" in states
     assert states["email:jane@example.com"].email == "jane@example.com"
     assert states["email:jane@example.com"].conversion_detected_at == "2024-01-05"

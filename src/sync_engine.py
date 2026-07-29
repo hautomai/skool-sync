@@ -120,13 +120,13 @@ class SyncEngine:
         self._warn_duplicate_keys(free_members, CommunityType.FREE)
         self._warn_duplicate_keys(paid_members, CommunityType.PAID)
 
-        # Index today's members by email-first key.
+        # Index today's members by name-first key.
         free_by_key: dict[str, Member] = {m.key: m for m in free_members if m.key}
         paid_by_key: dict[str, Member] = {m.key: m for m in paid_members if m.key}
         all_keys = set(free_by_key.keys()) | set(paid_by_key.keys())
 
-        # Re-index existing states by the new email-first key. This upgrades
-        # legacy name-only keys to email keys when an email is present.
+        # Re-index existing states by the current name-first key. This upgrades
+        # legacy email-only keys to name keys when names are present.
         existing_by_key: dict[str, MemberState] = {}
         for state in existing.values():
             key = state.key

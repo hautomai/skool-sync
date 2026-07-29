@@ -193,7 +193,7 @@ def test_write_members_filtered_to_converted(
     data_appends = [rows for rows in appended if rows[0] != MEMBER_HEADERS]
     assert len(data_appends) == 1
     assert len(data_appends[0]) == 1
-    assert data_appends[0][0][0] == "email:jane@example.com"
+    assert data_appends[0][0][0] == "jane|doe"
     assert data_appends[0][0][1] == "jane@example.com"
     assert data_appends[0][0][2] == "Jane"
     assert not updated

@@ -379,23 +379,14 @@ class GoogleSheetsSink(Sink):
             if not row:
                 continue
 
-            if key_col is not None and key_col < len(row):
-                key = str(row[key_col]).strip().lower()
-            else:
-                # Legacy fallback: try first+last columns.
-                try:
-                    first_col = lower_header.index("first name")
-                    last_col = lower_header.index("last name")
-                    first = str(row[first_col]).strip() if first_col < len(row) else ""
-                    last = str(row[last_col]).strip() if last_col < len(row) else ""
-                    key = f"{first}|{last}".lower()
-                except (ValueError, IndexError):
-                    continue
-
-            if not key or key == "|":
+            state = self._row_to_member(row, header) or MemberState()
+            # Use the current key derivation (name-first, email fallback) so
+            # legacy email-keyed rows are re-keyed to name keys when names are
+            # present. This makes migrating from email keys seamless.
+            key = state.key
+            if not key:
                 continue
 
-            state = self._row_to_member(row, header) or MemberState()
             existing_states[key] = state
             self._existing_rows[key] = row
             self._existing_ids[key] = str(row_idx)
