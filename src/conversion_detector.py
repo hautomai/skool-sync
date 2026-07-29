@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import logging
+import re
 from datetime import datetime
 
 from .models import CommunityType, LifecycleStatus, Member, MemberState
-from .utils import parse_iso_date
+from .utils import parse_iso_datetime
 
 logger = logging.getLogger("skool_sync")
 
@@ -28,11 +29,23 @@ def _is_active(member_state: MemberState, community: CommunityType) -> bool:
     return member_state.paid_status == "active"
 
 
+_DATE_ONLY = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
+def _to_datetime_str(value: str) -> str:
+    """Ensure a date-only string becomes a full datetime (YYYY-MM-DD HH:MM:SS)."""
+    if not value:
+        return ""
+    if _DATE_ONLY.match(value):
+        return f"{value} 00:00:00"
+    return value
+
+
 def apply_membership(
     state: MemberState,
     member: Member,
     community: CommunityType,
-    today: str,
+    run_time: str,
 ) -> MemberState:
     """Apply a single normalized member record to a MemberState."""
     status_field = "free_status" if community == CommunityType.FREE else "paid_status"
@@ -41,14 +54,18 @@ def apply_membership(
     first_seen_field = "first_seen_free_at" if community == CommunityType.FREE else "first_seen_paid_at"
     source_file_field = "free_source_file" if community == CommunityType.FREE else "paid_source_file"
 
-    # Update to active
+    # Update to active. Prefer the member's actual join timestamp; fall back to
+    # the sync run time so we always have hour-level precision.
+    parsed_joined = parse_iso_datetime(member.joined_at) if member.joined_at else ""
     setattr(state, status_field, "active")
-    setattr(state, joined_field, parse_iso_date(member.joined_at) if member.joined_at else today)
+    setattr(state, joined_field, parsed_joined or run_time)
     setattr(state, left_field, "")
     setattr(state, source_file_field, member.source_file)
 
-    # Track first seen using the member's snapshot date so backfills are accurate
-    seen_at = member.snapshot_date or today
+    # Track first seen using the member's join date when available. This keeps
+    # hour-level precision for same-day free-to-paid conversions. Fall back to
+    # the snapshot date (normalized to midnight) or the current run time.
+    seen_at = parsed_joined or _to_datetime_str(member.snapshot_date) or run_time
     existing_first = getattr(state, first_seen_field)
     if not existing_first or seen_at < existing_first:
         setattr(state, first_seen_field, seen_at)

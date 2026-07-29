@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import logging
+import re
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
 from dateutil import parser as date_parser
 from tenacity import retry, stop_after_attempt, wait_exponential
+
+logger = logging.getLogger("skool_sync")
 
 
 def setup_logging(log_level: str = "INFO") -> logging.Logger:
@@ -46,18 +49,20 @@ def utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
 
-def parse_iso_date(value: str) -> str:
-    """Attempt to normalize a date string to ISO YYYY-MM-DD."""
+def parse_iso_datetime(value: str) -> str:
+    """Normalize a date/datetime string to YYYY-MM-DD HH:MM:SS.
+
+    Preserves time when the source includes it (e.g. Skool/Apify exports).
+    Falls back to midnight when only a date is provided so string sorting
+    remains chronological and same-day conversions can be ordered.
+    """
     if not value or not value.strip():
         return ""
     try:
-        return value.strip().split("T")[0]
+        dt = date_parser.parse(value.strip())
+        return dt.strftime("%Y-%m-%d %H:%M:%S")
     except Exception:
-        pass
-    try:
-        dt = date_parser.parse(value)
-        return dt.date().isoformat()
-    except Exception:
+        logger.warning("Could not parse datetime value %r; keeping original", value)
         return value.strip()
 
 

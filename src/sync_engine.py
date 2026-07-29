@@ -38,6 +38,13 @@ class SyncEngine:
         self.exporter = exporter if exporter is not None else self._build_exporter()
         self.sink = sink if sink is not None else self._build_sink()
         self.today = run_date if run_date else utc_now().date().isoformat()
+        # Full datetime used for member timestamps; today is kept as a date for
+        # directory naming and daily metrics aggregation.
+        self.run_time = (
+            f"{self.today} 00:00:00"
+            if run_date
+            else utc_now().strftime("%Y-%m-%d %H:%M:%S")
+        )
         self.snapshot_dir = ensure_dir(Path(self.settings.download_dir) / self.today)
 
     def _build_exporter(self) -> SkoolExporter:
@@ -165,14 +172,14 @@ class SyncEngine:
                         state.full_name = representative.full_name
 
             if free_member:
-                state = apply_membership(state, free_member, CommunityType.FREE, self.today)
+                state = apply_membership(state, free_member, CommunityType.FREE, self.run_time)
             else:
-                state = flag_removed(state, CommunityType.FREE, self.today)
+                state = flag_removed(state, CommunityType.FREE, self.run_time)
 
             if paid_member:
-                state = apply_membership(state, paid_member, CommunityType.PAID, self.today)
+                state = apply_membership(state, paid_member, CommunityType.PAID, self.run_time)
             else:
-                state = flag_removed(state, CommunityType.PAID, self.today)
+                state = flag_removed(state, CommunityType.PAID, self.run_time)
 
             state.last_synced_at = utc_now().isoformat()
             states[key] = state
@@ -180,8 +187,8 @@ class SyncEngine:
         # Members no longer in either community should be flagged removed.
         for key, state in existing_by_key.items():
             if key not in all_keys:
-                state = flag_removed(state, CommunityType.FREE, self.today)
-                state = flag_removed(state, CommunityType.PAID, self.today)
+                state = flag_removed(state, CommunityType.FREE, self.run_time)
+                state = flag_removed(state, CommunityType.PAID, self.run_time)
                 state.last_synced_at = utc_now().isoformat()
                 states[key] = state
 
@@ -206,7 +213,7 @@ class SyncEngine:
                 new_free += 1
             if state.paid_status == "active" and (not old or old.paid_status != "active"):
                 new_paid += 1
-            if state.conversion_detected_at == self.today:
+            if state.conversion_detected_at and state.conversion_detected_at.startswith(self.today):
                 conversions += 1
             if old and old.free_status == "active" and state.free_status == "removed":
                 removed_free += 1

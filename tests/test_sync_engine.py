@@ -54,7 +54,7 @@ def test_compute_new_states_detects_conversion():
     assert states["jane|doe"].current_status == "free_only"
 
     states = engine._compute_new_states(states, [], [paid_member])
-    assert states["jane|doe"].conversion_detected_at == "2024-01-02"
+    assert states["jane|doe"].conversion_detected_at == "2024-01-02 00:00:00"
     assert states["jane|doe"].current_status == "converted"
 
 
@@ -123,7 +123,7 @@ def test_email_fallback_links_records_when_names_missing():
     states = engine._compute_new_states(states, [], [paid_member])
     assert "email:jane@example.com" in states
     assert states["email:jane@example.com"].email == "jane@example.com"
-    assert states["email:jane@example.com"].conversion_detected_at == "2024-01-05"
+    assert states["email:jane@example.com"].conversion_detected_at == "2024-01-05 00:00:00"
     assert states["email:jane@example.com"].current_status == "converted"
 
 
@@ -152,5 +152,5 @@ def test_conversion_detected_when_emails_differ_but_name_matches():
     states = engine._compute_new_states({}, [free_member], [paid_member])
 
     assert "jane|doe" in states
-    assert states["jane|doe"].conversion_detected_at == "2024-01-05"
+    assert states["jane|doe"].conversion_detected_at == "2024-01-05 00:00:00"
     assert states["jane|doe"].current_status == "converted"
