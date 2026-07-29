@@ -11,11 +11,7 @@ Production-ready automation that exports members from your **free** and **paid**
 - Uses the Apify actor to export members without local browser automation.
 - Runs on your own computer or a cheap VPS, scheduled once per day.
 
-## Quick start for owners (Streamlit wizard)
-
-The easiest way to set up the sync is with the included Streamlit wizard.
-
-### 1. Install dependencies
+## Install
 
 ```bash
 python -m venv .venv
@@ -23,7 +19,11 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-### 2. Run the wizard
+Then choose one of the setup methods below.
+
+## Setup with the wizard (recommended)
+
+The easiest way to configure the sync is with the included Streamlit wizard.
 
 ```bash
 streamlit run scripts/setup_wizard.py
@@ -35,7 +35,7 @@ Then follow the steps:
 2. **Connect Google Sheets** — choose **Service account** (recommended) or **OAuth 2.0**, provide the credentials, and verify the target spreadsheet.
 3. **Connect Skool** — enter your Skool admin email, password, and the free/paid community URLs.
 4. **Review & Save** — the wizard writes your `.env` file and installs a daily cron job.
-5. **Run first sync** — click the button to test everything end-to-end.
+5. **Run the real sync** — click the button to test everything end-to-end.
 
 ### Google Cloud prerequisites for the wizard
 
@@ -67,17 +67,9 @@ You can authenticate with either:
 3. Navigate to **IAM & Admin > Service accounts** and create a service account.
 4. Under **Keys**, add a new JSON key and download the `.json` file.
 5. Open the `.json` file, find the `client_email`, and share your Google Sheet with that email as an **Editor**.
-6. Keep the file safe — you will pass its path to the setup script below.
+6. Keep the file safe — you will pass its path to the setup script in the next step.
 
-### 2. Install
-
-```bash
-python -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-```
-
-### 3. Run the interactive setup
+### 2. Run the interactive setup
 
 ```bash
 python scripts/setup.py
@@ -90,7 +82,7 @@ It will ask for:
 - Google Sheets spreadsheet ID or URL
 - Whether to schedule a daily sync
 
-### 4. Authorize access to your Google Sheet
+### 3. Authorize access to your Google Sheet
 
 - **If you chose service account:** open `data/credentials.json`, find `client_email`, and share your Google Sheet with that email as an **Editor**.
 - **If you chose OAuth client:** run the one-time authorization. This opens a browser:
@@ -107,13 +99,13 @@ It will ask for:
 
   > **Heads-up:** the `--console` flow uses a deprecated Google redirect URI that may not work with newly created OAuth clients. If it fails, run `python scripts/google_auth.py` on a machine with a browser and copy the generated `data/google_oauth_token.json` to your server.
 
-### 5. Test without writing anything
+### 4. Test without writing anything
 
 ```bash
 python -m src.main --dry-run
 ```
 
-### 6. Run the real sync
+### 5. Run the real sync
 
 ```bash
 python -m src.main
