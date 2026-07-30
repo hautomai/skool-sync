@@ -89,13 +89,21 @@ def _is_default_avatar(url: str) -> bool:
     return any(pattern in lowered for pattern in default_patterns)
 
 
+try:  # pragma: no cover - optional speedup
+    from xxhash import xxh3_64_hexdigest as _xxh3_hexdigest
+
+    _HAS_XXHASH = True
+except ImportError:  # pragma: no cover - xxhash not installed
+    _HAS_XXHASH = False
+
+
 def _profile_pic_hash(profile_pic_url: str) -> str:
     """Return a short, stable hash of a normalized profile picture URL.
 
     - Strips query parameters and fragments (often contain dynamic tokens).
     - Strips trailing slashes.
     - Lower-cases the URL for consistency.
-    - Uses MD5 for speed (no external dependency).
+    - Prefers xxhash for speed, falls back to MD5 (no external dependency).
     """
     import hashlib
     from urllib.parse import urlparse
@@ -112,6 +120,8 @@ def _profile_pic_hash(profile_pic_url: str) -> str:
         path = parsed.path.split("?", 1)[0].split("#", 1)[0].rstrip("/")
         normalized = path or url
 
+    if _HAS_XXHASH:
+        return _xxh3_hexdigest(normalized.encode("utf-8"))[:16]
     return hashlib.md5(normalized.encode("utf-8")).hexdigest()[:16]
 
 

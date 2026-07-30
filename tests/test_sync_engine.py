@@ -331,3 +331,32 @@ def test_default_avatar_falls_back_to_name():
     # Should fall back to name key because the avatar is a default placeholder.
     assert "john|smith" in states
     assert states["john|smith"].current_status == "converted"
+
+
+def test_profile_pic_change_warns_and_migrates_key(caplog):
+    """When a member's profile pic URL changes, the engine falls back to name match and migrates the key."""
+    settings = Settings(
+        free_community_url="https://www.skool.com/free",
+        paid_community_url="https://www.skool.com/paid",
+    )
+    engine = SyncEngine(settings, sink=DummySink(), exporter=DummySkoolExporter())
+
+    old_url = "https://cdn.skool.com/users/abc123/profile.png"
+    new_url = "https://cdn.skool.com/users/abc123/new_profile.png"
+
+    free_member = _member("Jane", "Doe", CommunityType.FREE, "2024-01-01", skool_member_id="free-1", profile_pic_url=old_url)
+    states_day1 = engine._compute_new_states({}, [free_member], [])
+
+    # Day 2: same person, different profile pic URL.
+    free_member_day2 = _member("Jane", "Doe", CommunityType.FREE, "2024-01-02", skool_member_id="free-1", profile_pic_url=new_url)
+
+    with caplog.at_level("WARNING"):
+        states_day2 = engine._compute_new_states(states_day1, [free_member_day2], [])
+
+    # Should still be one active member, migrated to the new pic-hash key.
+    new_key = free_member_day2.key
+    assert new_key.startswith("pic:")
+    assert len(states_day2) == 1
+    assert states_day2[new_key].free_status == "active"
+    assert states_day2[new_key].profile_pic_url == new_url
+    assert "Profile picture URL changed" in caplog.text

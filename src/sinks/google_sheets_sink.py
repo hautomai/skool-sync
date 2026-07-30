@@ -54,7 +54,6 @@ MEMBER_HEADERS = [
     "First seen paid at",
     "Conversion detected at",
     "Current status",
-    "Profile pic URL",
     "Membership answers",
     "Last synced at",
 ]
@@ -339,7 +338,6 @@ class GoogleSheetsSink(Sink):
             member.first_seen_paid_at,
             member.conversion_detected_at,
             member.current_status,
-            member.profile_pic_url,
             json.dumps(member.membership_answers),
             member.last_synced_at,
         ]
@@ -378,7 +376,6 @@ class GoogleSheetsSink(Sink):
             first_seen_paid_at=_value("first seen paid at", "first_seen_paid_at"),
             conversion_detected_at=_value("conversion detected at", "conversion_detected_at"),
             current_status=_value("current status", "current_status"),
-            profile_pic_url=_value("profile pic url", "profile_pic_url"),
             membership_answers=membership_answers,
             last_synced_at=_value("last synced at", "last_synced_at"),
         )

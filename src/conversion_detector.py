@@ -81,7 +81,9 @@ def apply_membership(
         state.skool_member_id = member.skool_member_id
     if member.email and not state.email:
         state.email = member.email
-    if member.profile_pic_url and not state.profile_pic_url:
+    # Always keep the latest non-empty profile picture URL. If the URL changed,
+    # the next sync will use the new hash directly.
+    if member.profile_pic_url:
         state.profile_pic_url = member.profile_pic_url
 
     # Update names if blank

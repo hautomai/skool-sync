@@ -187,8 +187,10 @@ class SyncEngine:
             else:
                 existing_by_key[key] = state
 
+            # The fallback key intentionally ignores the profile picture URL so
+            # that we can still match a member when their avatar changes.
             fallback_key = generate_key(
-                state.profile_pic_url,
+                "",
                 state.email,
                 state.first_name,
                 state.last_name,
@@ -227,9 +229,33 @@ class SyncEngine:
             )
             if key in existing_by_key:
                 return existing_by_key[key], key
-            if key in fallback_index:
-                original_key = fallback_key_to_original_key.get(key, key)
-                return fallback_index[key], original_key
+            # If the primary key (profile pic hash) doesn't match, try the
+            # fallback name/email key so members whose avatar changed are not lost.
+            fallback_key = generate_key(
+                "",
+                member.email,
+                member.first_name,
+                member.last_name,
+            )
+            if fallback_key in fallback_index:
+                original_key = fallback_key_to_original_key.get(fallback_key, fallback_key)
+                state = fallback_index[fallback_key]
+                # If we matched by name/email but the profile picture URL has
+                # changed, warn so the operator knows why the key migrated.
+                if (
+                    member.profile_pic_url
+                    and state.profile_pic_url
+                    and member.profile_pic_url != state.profile_pic_url
+                ):
+                    logger.warning(
+                        "Profile picture URL changed for %s %s (%s -> %s); "
+                        "falling back to name/email match and migrating key.",
+                        state.first_name,
+                        state.last_name,
+                        state.profile_pic_url,
+                        member.profile_pic_url,
+                    )
+                return state, original_key
             return None, None
 
         for key in all_keys:
