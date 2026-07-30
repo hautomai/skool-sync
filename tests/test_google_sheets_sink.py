@@ -160,6 +160,7 @@ def test_write_members_filtered_to_converted(
     appended: list[list[list[Any]]] = []
     updated: list[list[tuple[int, list[Any]]]] = []
     deleted_rows: list[list[int]] = []
+    headers_written: list[tuple[str, list[str]]] = []
 
     def fake_append_rows(sheet: str, rows: list[list[Any]]) -> None:
         appended.append(rows)
@@ -170,12 +171,15 @@ def test_write_members_filtered_to_converted(
     def fake_delete_rows(sheet_name: str, row_indices: list[int]) -> None:
         deleted_rows.append(row_indices)
 
+    def fake_ensure_headers(sheet_name: str, headers: list[str]) -> None:
+        headers_written.append((sheet_name, headers))
+
     monkeypatch.setattr(sink, "_append_rows", fake_append_rows)
     monkeypatch.setattr(sink, "_batch_update_rows", fake_batch_update_rows)
     monkeypatch.setattr(sink, "_delete_rows", fake_delete_rows)
+    monkeypatch.setattr(sink, "_ensure_headers", fake_ensure_headers)
 
     # Simulate that fetch_existing() has already run on an empty sheet.
-    sink._header_present = False
     sink._existing_rows = {}
     sink._existing_ids = {}
 
@@ -188,13 +192,12 @@ def test_write_members_filtered_to_converted(
 
     sink.write_members([converted_member, free_member, paid_member], {}, {})
 
-    # With no existing rows, the header and the single converted member are appended.
-    assert any(rows[0] == MEMBER_HEADERS for rows in appended)
-    data_appends = [rows for rows in appended if rows[0] != MEMBER_HEADERS]
-    assert len(data_appends) == 1
-    assert len(data_appends[0]) == 1
-    assert data_appends[0][0][0] == "jane|doe"
-    assert data_appends[0][0][1] == "jane@example.com"
-    assert data_appends[0][0][2] == "Jane"
+    # Headers are written once, then only the converted member is appended.
+    assert headers_written == [(sink.members_sheet, MEMBER_HEADERS)]
+    assert len(appended) == 1
+    assert len(appended[0]) == 1
+    assert appended[0][0][0] == "jane|doe"
+    assert appended[0][0][1] == "jane@example.com"
+    assert appended[0][0][2] == "Jane"
     assert not updated
     assert not deleted_rows

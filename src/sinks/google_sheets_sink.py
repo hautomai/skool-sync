@@ -104,7 +104,6 @@ class GoogleSheetsSink(Sink):
         # Populated by fetch_existing() and consumed by write_members().
         self._existing_rows: dict[str, list[Any]] | None = None
         self._existing_ids: dict[str, str] | None = None
-        self._header_present: bool = False
 
     def _load_credentials(self) -> Any:
         """Return valid Google credentials using service account or OAuth."""
@@ -196,6 +195,22 @@ class GoogleSheetsSink(Sink):
             valueInputOption="USER_ENTERED",
             body=body,
         ).execute()
+
+    def _update_range(self, range_spec: str, values: list[list[Any]]) -> None:
+        """Overwrite a range with the given values."""
+        body = {"values": values}
+        self.service.spreadsheets().values().update(
+            spreadsheetId=self.spreadsheet_id,
+            range=range_spec,
+            valueInputOption="USER_ENTERED",
+            body=body,
+        ).execute()
+
+    def _ensure_headers(self, sheet_name: str, headers: list[str]) -> None:
+        """Write the header row to A1, overwriting any existing header."""
+        self._find_or_create_sheet(sheet_name)
+        end_col = self._column_letter(len(headers) - 1)
+        self._update_range(f"{sheet_name}!A1:{end_col}1", [headers])
 
     @staticmethod
     def _column_letter(index: int) -> str:
@@ -362,10 +377,8 @@ class GoogleSheetsSink(Sink):
         if not values:
             self._existing_rows = {}
             self._existing_ids = {}
-            self._header_present = False
             return {}, {}
 
-        self._header_present = True
         if len(values) < 2:
             self._existing_rows = {}
             self._existing_ids = {}
@@ -420,9 +433,7 @@ class GoogleSheetsSink(Sink):
         written_keys = {m.key for m in members}
 
         # Ensure the header row is present before writing data.
-        if not self._header_present:
-            self._append_rows(self.members_sheet, [MEMBER_HEADERS])
-            self._header_present = True
+        self._ensure_headers(self.members_sheet, MEMBER_HEADERS)
 
         updates: list[tuple[int, list[Any]]] = []
         appends: list[list[Any]] = []
@@ -468,10 +479,7 @@ class GoogleSheetsSink(Sink):
             logger.info("No members to write to Google Sheets")
 
     def write_daily_metrics(self, metrics: DailyMetrics) -> None:
-        self._find_or_create_sheet(self.metrics_sheet)
-        current_header = self._sheet_values(f"{self.metrics_sheet}!A1:J1")
-        if not current_header or current_header[0] != DAILY_METRICS_HEADERS:
-            self._append_rows(self.metrics_sheet, [DAILY_METRICS_HEADERS])
+        self._ensure_headers(self.metrics_sheet, DAILY_METRICS_HEADERS)
         values = [[
             metrics.date,
             metrics.free_members_total,
@@ -486,10 +494,7 @@ class GoogleSheetsSink(Sink):
 
     def write_sync_run(self, summary: dict) -> None:
         """Append a sync run record to the SyncRuns sheet."""
-        self._find_or_create_sheet("SyncRuns")
-        current_header = self._sheet_values("SyncRuns!A1:N1")
-        if not current_header or current_header[0] != SYNC_RUNS_HEADERS:
-            self._append_rows("SyncRuns", [SYNC_RUNS_HEADERS])
+        self._ensure_headers("SyncRuns", SYNC_RUNS_HEADERS)
 
         started_at = summary.get("started_at")
         finished_at = summary.get("finished_at")

@@ -21,6 +21,32 @@ def _write_csv(path: Path, rows: list[dict[str, str]], fieldnames: list[str]) ->
         writer.writerows(rows)
 
 
+def _name_key(row: dict[str, str]) -> str:
+    return f"{row.get('first_name', '').strip().lower()}|{row.get('last_name', '').strip().lower()}"
+
+
+def _generate_unique_names(existing_keys: set[str], count: int, community: str) -> list[str]:
+    """Return 'First Last' strings that do not collide with existing name keys."""
+    base = [
+        "Liam", "Olivia", "Noah", "Emma", "Oliver", "Ava", "Elijah", "Sophia",
+        "Lucas", "Mia", "Mason", "Charlotte", "Ethan", "Amelia", "Logan", "Isabella",
+        "James", "Harper", "Alexander", "Evelyn", "Benjamin", "Abigail", "Jacob", "Emily",
+        "Michael", "Elizabeth", "Daniel", "Avery", "Henry", "Sofia", "Jackson", "Camila",
+    ]
+    last = "TestLast"
+    names: list[str] = []
+    i = 0
+    while len(names) < count:
+        candidate = f"{base[i % len(base)]}{community}{len(names)+1:03d} {last}{len(names)+1:03d}"
+        key = candidate.lower().replace(" ", "|")
+        i += 1
+        if key in existing_keys:
+            continue
+        existing_keys.add(key)
+        names.append(candidate)
+    return names
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Generate Day 3 test dataset")
     parser.add_argument("--day2-dir", default="data/raw/2026-07-31", help="Path to Day 2 CSVs")
@@ -47,8 +73,15 @@ def main() -> None:
     new_free_rows = [r for r in free_rows if r["id"] not in remove_free_ids]
     new_paid_rows = [r for r in paid_rows if r["id"] not in remove_paid_ids]
 
-    # 5 conversions: existing free members who now also join paid
-    # Exclude any free member whose name collides with an existing paid member.
+    # Track all name keys currently in use after removals.
+    used_name_keys = {_name_key(r) for r in new_free_rows} | {_name_key(r) for r in new_paid_rows}
+
+    # 12 new free members with unique names
+    new_free_names = _generate_unique_names(used_name_keys, 12, "free")
+    # 4 new paid-only members with unique names
+    new_paid_only_names = _generate_unique_names(used_name_keys, 4, "paid")
+
+    # 5 conversions: existing free members whose name does not collide with any paid member.
     paid_name_keys = {_name_key(r) for r in new_paid_rows}
     conversion_candidates = [
         r for r in new_free_rows
@@ -56,15 +89,9 @@ def main() -> None:
     ]
     conversions = random.sample(conversion_candidates, 5)
 
-    # 12 new free members and 4 new paid-only members with unique names.
-    new_free_members = _generate_new_members(12, "free", paid_name_keys | {_name_key(r) for r in new_free_rows})
-    new_paid_only_members = _generate_new_members(4, "paid", paid_name_keys)
-
-    new_free_rows.extend(new_free_members)
-    # Conversions are already in the free list.
-
+    new_free_rows.extend(_make_new_rows(new_free_names, "free"))
+    new_paid_rows.extend(_make_new_rows(new_paid_only_names, "paid"))
     new_paid_rows.extend(conversions)
-    new_paid_rows.extend(new_paid_only_members)
 
     random.shuffle(new_free_rows)
     random.shuffle(new_paid_rows)
@@ -80,32 +107,16 @@ def main() -> None:
     print(f"  Conversions:   {len(conversions)}")
 
 
-def _name_key(row: dict[str, str]) -> str:
-    return f"{row.get('first_name', '').strip().lower()}|{row.get('last_name', '').strip().lower()}"
-
-
-def _generate_new_members(count: int, community: str, used_name_keys: set[str]) -> list[dict[str, str]]:
+def _make_new_rows(names: list[str], community: str) -> list[dict[str, str]]:
     rows: list[dict[str, str]] = []
-    base_names = [
-        ("Liam", "Smith"), ("Olivia", "Johnson"), ("Noah", "Williams"), ("Emma", "Brown"),
-        ("Oliver", "Jones"), ("Ava", "Garcia"), ("Elijah", "Miller"), ("Sophia", "Davis"),
-        ("Lucas", "Rodriguez"), ("Mia", "Martinez"), ("Mason", "Hernandez"), ("Charlotte", "Lopez"),
-    ]
-    i = 0
-    while len(rows) < count:
-        first, last = base_names[i % len(base_names)]
-        suffix = f"{community}{i+1:03d}"
-        key = f"{first.lower()}|{last.lower()}{suffix}"
-        i += 1
-        if key in used_name_keys:
-            continue
-        used_name_keys.add(key)
+    for i, full_name in enumerate(names, start=1):
+        first, last = full_name.split(" ", 1)
         rows.append(
             {
                 "id": f"new-{community}-{i}",
                 "memberId": f"new-{community}-{i}",
-                "first_name": f"{first}{suffix}",
-                "last_name": f"{last}{suffix}",
+                "first_name": first,
+                "last_name": last,
                 "slug": community,
                 "email": "",
                 "profilePicUrl": "",
