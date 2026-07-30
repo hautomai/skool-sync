@@ -126,25 +126,34 @@ class SyncEngine:
 
         counts: dict[str, int] = Counter(m.key for m in members if m.key)
         for key, count in counts.items():
-            if count > 1:
-                if key.startswith("email:"):
-                    logger.warning(
-                        "Duplicate email key in %s community: %s appears %d times. "
-                        "These rows will be merged into a single member record.",
-                        community.value,
-                        key,
-                        count,
-                    )
-                else:
-                    first, last = key.split("|", 1)
-                    logger.warning(
-                        "Duplicate name key in %s community: %s %s appears %d times. "
-                        "These rows will be merged into a single member record.",
-                        community.value,
-                        first,
-                        last,
-                        count,
-                    )
+            if count <= 1:
+                continue
+            if key.startswith("email:"):
+                logger.warning(
+                    "Duplicate email key in %s community: %s appears %d times. "
+                    "These rows will be merged into a single member record.",
+                    community.value,
+                    key,
+                    count,
+                )
+            elif "|" in key:
+                first, last = key.split("|", 1)
+                logger.warning(
+                    "Duplicate name key in %s community: %s %s appears %d times. "
+                    "These rows will be merged into a single member record.",
+                    community.value,
+                    first,
+                    last,
+                    count,
+                )
+            else:
+                logger.warning(
+                    "Duplicate member id key in %s community: %s appears %d times. "
+                    "These rows will be merged into a single member record.",
+                    community.value,
+                    key,
+                    count,
+                )
 
     def _compute_new_states(
         self,
@@ -166,6 +175,7 @@ class SyncEngine:
         # seamlessly migrated to the new member-id key on the first run.
         existing_by_key: dict[str, MemberState] = {}
         fallback_index: dict[str, MemberState] = {}
+        fallback_key_to_original_key: dict[str, str] = {}
         for state in existing.values():
             key = state.key
             if key in existing_by_key:
@@ -185,15 +195,22 @@ class SyncEngine:
             )
             if fallback_key and fallback_key not in fallback_index:
                 fallback_index[fallback_key] = state
+                fallback_key_to_original_key[fallback_key] = key
 
         states: dict[str, MemberState] = {}
+        consumed_existing_keys: set[str] = set()
 
-        def _lookup_state(member: Member | None) -> MemberState | None:
-            """Find an existing state by member id or legacy fallback key."""
+        def _lookup_state(member: Member | None) -> tuple[MemberState | None, str | None]:
+            """Find an existing state by member id or legacy fallback key.
+
+            Returns the state and the original key under which it was stored,
+            so migrated legacy records can be marked consumed and not re-added
+            as removed.
+            """
             if member is None:
-                return None
+                return None, None
             if member.skool_member_id and member.skool_member_id in existing_by_key:
-                return existing_by_key[member.skool_member_id]
+                return existing_by_key[member.skool_member_id], member.skool_member_id
             fallback_key = generate_key(
                 "",
                 member.email,
@@ -201,8 +218,9 @@ class SyncEngine:
                 member.last_name,
             )
             if fallback_key and fallback_key in fallback_index:
-                return fallback_index[fallback_key]
-            return None
+                original_key = fallback_key_to_original_key.get(fallback_key, fallback_key)
+                return fallback_index[fallback_key], original_key
+            return None, None
 
         for key in all_keys:
             free_member = free_by_key.get(key)
@@ -211,7 +229,9 @@ class SyncEngine:
 
             # Try primary lookup on member id, then legacy fallback.
             any_member = paid_member or free_member
-            state = _lookup_state(any_member)
+            state, original_key = _lookup_state(any_member)
+            if original_key:
+                consumed_existing_keys.add(original_key)
             if state is None:
                 state = MemberState(
                     skool_member_id=representative.skool_member_id if representative else "",
@@ -249,6 +269,9 @@ class SyncEngine:
 
         # Members no longer in either community should be flagged removed.
         for key, state in existing_by_key.items():
+            if key in consumed_existing_keys:
+                # This state was already migrated/reused above; do not re-add.
+                continue
             if key not in all_keys:
                 # Deep-copy so the caller's previous-state dict isn't mutated.
                 state = copy.deepcopy(state)

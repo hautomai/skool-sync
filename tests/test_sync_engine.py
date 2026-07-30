@@ -211,3 +211,62 @@ def test_removed_counts_are_incremental():
     metrics = engine._calculate_metrics(states_day1, states_day2, 0, 0.0)
     assert metrics.free_members_total == 0
     assert metrics.removed_free_members == 1
+
+
+def test_legacy_name_key_migrates_to_member_id():
+    """A state keyed only by name is migrated to the member id key and not duplicated."""
+    settings = Settings(
+        free_community_url="https://www.skool.com/free",
+        paid_community_url="https://www.skool.com/paid",
+    )
+    engine = SyncEngine(settings, sink=DummySink(), exporter=DummySkoolExporter())
+
+    # Day 1: only name-based key exists (legacy state).
+    legacy_state = MemberState(
+        first_name="Jane",
+        last_name="Doe",
+        full_name="Jane Doe",
+        free_status="active",
+    )
+    legacy_states = {"jane|doe": legacy_state}
+
+    # Day 2: the same person arrives with a member id.
+    new_member = _member("Jane", "Doe", CommunityType.FREE, "2024-01-02", skool_member_id="skool-migrate")
+    states = engine._compute_new_states(legacy_states, [new_member], [])
+
+    # Should have exactly one active free member, keyed by member id.
+    assert len(states) == 1
+    assert "skool-migrate" in states
+    assert states["skool-migrate"].free_status == "active"
+    assert states["skool-migrate"].first_name == "Jane"
+    # The legacy name key should not be present as a removed duplicate.
+    assert "jane|doe" not in states
+
+
+def test_member_id_state_matched_by_name_does_not_create_ghost():
+    """If an existing state has a member id but a new record only matches by name, no ghost is created."""
+    settings = Settings(
+        free_community_url="https://www.skool.com/free",
+        paid_community_url="https://www.skool.com/paid",
+    )
+    engine = SyncEngine(settings, sink=DummySink(), exporter=DummySkoolExporter())
+
+    # Day 1: state keyed by member id.
+    state_day1 = MemberState(
+        skool_member_id="skool-ghost",
+        first_name="Jane",
+        last_name="Doe",
+        full_name="Jane Doe",
+        free_status="active",
+    )
+
+    # Day 2: incoming record has no member id, only a matching name.
+    new_member = _member("Jane", "Doe", CommunityType.FREE, "2024-01-02")
+    states = engine._compute_new_states({"skool-ghost": state_day1}, [new_member], [])
+
+    # Exactly one active state, no duplicate removed record under the member id.
+    assert len(states) == 1
+    assert "jane|doe" in states
+    assert states["jane|doe"].free_status == "active"
+    assert states["jane|doe"].skool_member_id == "skool-ghost"
+    assert "skool-ghost" not in states
