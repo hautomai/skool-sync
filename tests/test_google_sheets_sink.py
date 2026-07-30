@@ -197,8 +197,7 @@ def test_write_members_filtered_to_converted(
     assert len(appended) == 1
     assert len(appended[0]) == 1
     assert appended[0][0][0] == "jane|doe"
-    assert appended[0][0][1] == "m-1"
-    assert appended[0][0][2] == "jane@example.com"
-    assert appended[0][0][3] == "Jane"
+    assert appended[0][0][1] == "jane@example.com"
+    assert appended[0][0][2] == "Jane"
     assert not updated
     assert not deleted_rows

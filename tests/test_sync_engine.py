@@ -288,9 +288,9 @@ def test_profile_pic_hash_links_members_across_communities():
 
     states = engine._compute_new_states({}, [free_member], [paid_member])
 
-    # They should be merged under the hashed profile-pic key.
+    # They should be merged under the hashed profile-pic key (16-char hex).
     pic_key = free_member.key
-    assert pic_key.startswith("pic:")
+    assert len(pic_key) == 16
     assert pic_key == paid_member.key
     assert len(states) == 1
     assert states[pic_key].current_status == "converted"
@@ -355,7 +355,7 @@ def test_profile_pic_change_warns_and_migrates_key(caplog):
 
     # Should still be one active member, migrated to the new pic-hash key.
     new_key = free_member_day2.key
-    assert new_key.startswith("pic:")
+    assert len(new_key) == 16
     assert len(states_day2) == 1
     assert states_day2[new_key].free_status == "active"
     assert states_day2[new_key].profile_pic_url == new_url

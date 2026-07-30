@@ -41,7 +41,6 @@ def _index_or_none(header: list[str], column_name: str) -> int | None:
 
 MEMBER_HEADERS = [
     "Member key",
-    "Skool member id",
     "Email",
     "First name",
     "Last name",
@@ -325,7 +324,6 @@ class GoogleSheetsSink(Sink):
     def _member_to_row(member: MemberState) -> list[Any]:
         return [
             member.key,
-            member.skool_member_id,
             member.email,
             member.first_name,
             member.last_name,
@@ -363,7 +361,6 @@ class GoogleSheetsSink(Sink):
             membership_answers = {}
 
         return MemberState(
-            skool_member_id=_value("skool member id", "skool_member_id"),
             email=_value("email"),
             first_name=_value("first name", "first_name"),
             last_name=_value("last name", "last_name"),

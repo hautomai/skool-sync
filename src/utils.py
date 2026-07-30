@@ -145,7 +145,7 @@ def generate_key(
     """
     pic_hash = _profile_pic_hash(profile_pic_url)
     if pic_hash:
-        return f"pic:{pic_hash}"
+        return pic_hash
 
     key = f"{first_name.strip().lower()}|{last_name.strip().lower()}"
     if key != "|":

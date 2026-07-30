@@ -148,7 +148,7 @@ class SyncEngine:
                 )
             else:
                 logger.warning(
-                    "Duplicate member id key in %s community: %s appears %d times. "
+                    "Duplicate profile-pic hash key in %s community: %s appears %d times. "
                     "These rows will be merged into a single member record.",
                     community.value,
                     key,
