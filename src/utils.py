@@ -71,23 +71,80 @@ def safe_filename(name: str) -> str:
     return "".join(c if c.isalnum() or c in "._- " else "_" for c in name).strip()
 
 
+def _is_default_avatar(url: str) -> bool:
+    """Return True when the URL points to a generic/default avatar."""
+    lowered = url.lower()
+    # Common default avatar path fragments used by Skool / generic CDNs.
+    default_patterns = (
+        "/default",
+        "avatar.png",
+        "avatar.jpg",
+        "avatar.jpeg",
+        "avatar.svg",
+        "default_avatar",
+        "placeholder",
+        "no-image",
+        "gravatar.com/avatar/0000000",
+    )
+    return any(pattern in lowered for pattern in default_patterns)
+
+
+def _profile_pic_hash(profile_pic_url: str) -> str:
+    """Return a short, stable hash of a normalized profile picture URL.
+
+    - Strips query parameters and fragments (often contain dynamic tokens).
+    - Strips trailing slashes.
+    - Lower-cases the URL for consistency.
+    - Uses MD5 for speed (no external dependency).
+    """
+    import hashlib
+    from urllib.parse import urlparse
+
+    url = (profile_pic_url or "").strip()
+    if not url or _is_default_avatar(url):
+        return ""
+
+    parsed = urlparse(url)
+    # Rebuild URL without query/fragment, preserving scheme and netloc.
+    normalized = f"{parsed.scheme.lower()}://{parsed.netloc.lower()}{parsed.path.rstrip('/')}"
+    if not parsed.scheme or not parsed.netloc:
+        # Relative or malformed URL; hash the raw string without query params.
+        path = parsed.path.split("?", 1)[0].split("#", 1)[0].rstrip("/")
+        normalized = path or url
+
+    return hashlib.md5(normalized.encode("utf-8")).hexdigest()[:16]
+
+
 def generate_key(
+    profile_pic_url: str = "",
     email: str = "",
     first_name: str = "",
     last_name: str = "",
 ) -> str:
     """Stable identity key for a member.
 
-    Skool member ids are community-specific, so the same person has different
-    ids in the free and paid communities. Therefore the key is built from the
-    member's name. When names are missing, fall back to the email address.
+    The Apify/Skool export includes a community-specific `memberId`, so it
+    cannot be used to match the same person across free and paid communities.
+    The profile picture URL, however, is global to the user. We hash the
+    normalized URL to create a short, stable cross-community key.
+
+    Fallback order:
+        1. Hashed profile picture URL
+        2. first_name|last_name
+        3. email:<email>
     """
+    pic_hash = _profile_pic_hash(profile_pic_url)
+    if pic_hash:
+        return f"pic:{pic_hash}"
+
     key = f"{first_name.strip().lower()}|{last_name.strip().lower()}"
     if key != "|":
         return key
+
     clean_email = email.strip().lower()
     if clean_email:
         return f"email:{clean_email}"
+
     return ""
 
 

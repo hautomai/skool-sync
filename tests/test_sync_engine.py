@@ -32,6 +32,7 @@ def _member(
     snapshot_date: str,
     email: str = "",
     skool_member_id: str = "",
+    profile_pic_url: str = "",
 ) -> Member:
     return Member(
         email=email,
@@ -45,6 +46,7 @@ def _member(
         last_name=last_name,
         full_name=f"{first_name} {last_name}".strip(),
         skool_member_id=skool_member_id,
+        profile_pic_url=profile_pic_url,
     )
 
 
@@ -269,3 +271,63 @@ def test_member_id_state_matched_by_name_does_not_create_ghost():
     assert "jane|doe" in states
     assert states["jane|doe"].free_status == "active"
     assert states["jane|doe"].skool_member_id == "free-ghost"
+
+
+def test_profile_pic_hash_links_members_across_communities():
+    """Members with the same profile pic URL but different names/ids are treated as one person."""
+    settings = Settings(
+        free_community_url="https://www.skool.com/free",
+        paid_community_url="https://www.skool.com/paid",
+    )
+    engine = SyncEngine(settings, sink=DummySink(), exporter=DummySkoolExporter())
+
+    url = "https://cdn.skool.com/users/abc123/profile.png?v=1"
+    free_member = _member("Jane", "Doe", CommunityType.FREE, "2024-01-01", skool_member_id="free-1", profile_pic_url=url)
+    # Same person in paid community with a different community-specific id and a typo in name.
+    paid_member = _member("Jane", "Dow", CommunityType.PAID, "2024-01-05", skool_member_id="paid-1", profile_pic_url=url)
+
+    states = engine._compute_new_states({}, [free_member], [paid_member])
+
+    # They should be merged under the hashed profile-pic key.
+    pic_key = free_member.key
+    assert pic_key.startswith("pic:")
+    assert pic_key == paid_member.key
+    assert len(states) == 1
+    assert states[pic_key].current_status == "converted"
+    assert states[pic_key].skool_member_id == "free-1"
+
+
+def test_profile_pic_hash_falls_back_to_name_when_url_missing():
+    """Members without a profile pic URL still match by name."""
+    settings = Settings(
+        free_community_url="https://www.skool.com/free",
+        paid_community_url="https://www.skool.com/paid",
+    )
+    engine = SyncEngine(settings, sink=DummySink(), exporter=DummySkoolExporter())
+
+    free_member = _member("John", "Smith", CommunityType.FREE, "2024-01-01", skool_member_id="free-1")
+    paid_member = _member("John", "Smith", CommunityType.PAID, "2024-01-05", skool_member_id="paid-1")
+
+    states = engine._compute_new_states({}, [free_member], [paid_member])
+
+    assert "john|smith" in states
+    assert states["john|smith"].current_status == "converted"
+
+
+def test_default_avatar_falls_back_to_name():
+    """A default/placeholder avatar URL should not be used as identity key."""
+    settings = Settings(
+        free_community_url="https://www.skool.com/free",
+        paid_community_url="https://www.skool.com/paid",
+    )
+    engine = SyncEngine(settings, sink=DummySink(), exporter=DummySkoolExporter())
+
+    url = "https://cdn.skool.com/default_avatar.png"
+    free_member = _member("John", "Smith", CommunityType.FREE, "2024-01-01", skool_member_id="free-1", profile_pic_url=url)
+    paid_member = _member("John", "Smith", CommunityType.PAID, "2024-01-05", skool_member_id="paid-1", profile_pic_url=url)
+
+    states = engine._compute_new_states({}, [free_member], [paid_member])
+
+    # Should fall back to name key because the avatar is a default placeholder.
+    assert "john|smith" in states
+    assert states["john|smith"].current_status == "converted"

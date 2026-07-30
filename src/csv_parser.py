@@ -19,6 +19,7 @@ _LAST_NAME_ALIASES = {"last name", "last_name", "lastname"}
 _JOINED_ALIASES = {"joined", "join date", "join_date", "joined at", "joined_at", "member since", "joinedat"}
 _INVITED_ALIASES = {"invited by", "invited_by", "inviter", "invitedby"}
 _ID_ALIASES = {"id", "member id", "member_id", "memberId", "skool id", "skool_id", "skool_member_id"}
+_PROFILE_PIC_ALIASES = {"profilepicurl", "profile pic url", "profile_pic_url", "avatar", "picture", "profile_image"}
 
 
 def _find_column(columns: list[str], aliases: set[str]) -> str | None:
@@ -62,6 +63,7 @@ def extract_standard_fields(record: dict[str, Any]) -> dict[str, Any]:
         "joined_at": get(_JOINED_ALIASES),
         "invited_by": get(_INVITED_ALIASES),
         "skool_member_id": get(_ID_ALIASES),
+        "profile_pic_url": get(_PROFILE_PIC_ALIASES),
     }
 
 

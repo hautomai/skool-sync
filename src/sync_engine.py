@@ -188,6 +188,7 @@ class SyncEngine:
                 existing_by_key[key] = state
 
             fallback_key = generate_key(
+                state.profile_pic_url,
                 state.email,
                 state.first_name,
                 state.last_name,
@@ -218,7 +219,12 @@ class SyncEngine:
             """
             if member is None:
                 return None, None
-            key = generate_key(member.email, member.first_name, member.last_name)
+            key = generate_key(
+                member.profile_pic_url,
+                member.email,
+                member.first_name,
+                member.last_name,
+            )
             if key in existing_by_key:
                 return existing_by_key[key], key
             if key in fallback_index:

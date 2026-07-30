@@ -76,11 +76,13 @@ def apply_membership(
         if not state.conversion_detected_at or seen_at < state.conversion_detected_at:
             state.conversion_detected_at = seen_at
 
-    # Update id/email if the incoming record has one and the state does not.
+    # Update id/email/profile pic if the incoming record has one and the state does not.
     if member.skool_member_id and not state.skool_member_id:
         state.skool_member_id = member.skool_member_id
     if member.email and not state.email:
         state.email = member.email
+    if member.profile_pic_url and not state.profile_pic_url:
+        state.profile_pic_url = member.profile_pic_url
 
     # Update names if blank
     if member.first_name and not state.first_name:

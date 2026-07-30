@@ -45,11 +45,14 @@ class Member:
     invited_by: str = ""
     membership_answers: dict[str, Any] = field(default_factory=dict)
     skool_member_id: str = ""
+    profile_pic_url: str = ""
     raw_record: dict[str, Any] = field(default_factory=dict)
 
     @property
     def key(self) -> str:
-        return generate_key(self.email, self.first_name, self.last_name)
+        return generate_key(
+            self.profile_pic_url, self.email, self.first_name, self.last_name
+        )
 
 
 @dataclass
@@ -74,11 +77,14 @@ class MemberState:
     membership_answers: dict[str, Any] = field(default_factory=dict)
     free_source_file: str = ""
     paid_source_file: str = ""
+    profile_pic_url: str = ""
     last_synced_at: str = ""
 
     @property
     def key(self) -> str:
-        return generate_key(self.email, self.first_name, self.last_name)
+        return generate_key(
+            self.profile_pic_url, self.email, self.first_name, self.last_name
+        )
 
 
 @dataclass

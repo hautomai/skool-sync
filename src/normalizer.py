@@ -64,6 +64,7 @@ def normalize_record(
         invited_by=fields["invited_by"],
         membership_answers=membership_answers,
         skool_member_id=fields["skool_member_id"],
+        profile_pic_url=fields["profile_pic_url"],
         raw_record=raw,
     )
 
