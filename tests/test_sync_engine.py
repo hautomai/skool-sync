@@ -156,8 +156,8 @@ def test_conversion_detected_when_emails_differ_but_name_matches():
     assert states["jane|doe"].current_status == "converted"
 
 
-def test_detected_conversions_are_incremental():
-    """Conversions are counted once; repeated runs on the same converted member report 0."""
+def test_metrics_reflect_membership_snapshot():
+    """Daily metrics reflect the current membership snapshot, including conversions."""
     settings = Settings(
         free_community_url="https://www.skool.com/free",
         paid_community_url="https://www.skool.com/paid",
@@ -166,14 +166,17 @@ def test_detected_conversions_are_incremental():
     free_member = _member("Jane", "Doe", CommunityType.FREE, "2024-01-01")
     paid_member = _member("Jane", "Doe", CommunityType.PAID, "2024-01-02")
 
-    # First run: Jane converts.
-    states = engine._compute_new_states({}, [free_member], [])
-    states = engine._compute_new_states(states, [], [paid_member])
+    # Jane is active in both communities: she counts as converted and free+paid.
+    states = engine._compute_new_states({}, [free_member], [paid_member])
     metrics = engine._calculate_metrics({}, states, 0, 0.0)
-    assert metrics.detected_conversions == 1
-    assert metrics.new_paid_members == 1
+    assert metrics.free_members_total == 1
+    assert metrics.paid_members_total == 1
+    assert metrics.free_and_paid_members == 1
+    assert metrics.converted_members == 1
+    assert metrics.removed_free_members == 0
+    assert metrics.removed_paid_members == 0
 
-    # Second run: same state, no new conversions.
+    # Recomputing the same state keeps the same snapshot counts.
     metrics = engine._calculate_metrics(states, states, 0, 0.0)
-    assert metrics.detected_conversions == 0
-    assert metrics.new_paid_members == 0
+    assert metrics.converted_members == 1
+    assert metrics.free_and_paid_members == 1

@@ -87,9 +87,8 @@ class DailyMetrics:
     date: str
     free_members_total: int = 0
     paid_members_total: int = 0
-    new_free_members: int = 0
-    new_paid_members: int = 0
-    detected_conversions: int = 0
+    free_and_paid_members: int = 0
+    converted_members: int = 0
     removed_free_members: int = 0
     removed_paid_members: int = 0
     failed_records: int = 0
@@ -106,9 +105,8 @@ class SyncSummary:
     finished_at: datetime
     free_members_total: int = 0
     paid_members_total: int = 0
-    new_free_members: int = 0
-    new_paid_members: int = 0
-    detected_conversions: int = 0
+    free_and_paid_members: int = 0
+    converted_members: int = 0
     removed_free_members: int = 0
     removed_paid_members: int = 0
     failed_records: int = 0

@@ -133,7 +133,7 @@ class SyncEngine:
         paid_by_key: dict[str, Member] = {m.key: m for m in paid_members if m.key}
         all_keys = set(free_by_key.keys()) | set(paid_by_key.keys())
 
-        # Re-index existing states by the current name-first key. This upgrades
+        # Re-index existing states by the current email-first key. This upgrades
         # legacy email-only keys to name keys when names are present.
         existing_by_key: dict[str, MemberState] = {}
         for state in existing.values():
@@ -204,34 +204,21 @@ class SyncEngine:
         failed_records: int,
         runtime_seconds: float,
     ) -> DailyMetrics:
-        new_free = 0
-        new_paid = 0
-        conversions = 0
-        removed_free = 0
-        removed_paid = 0
-
-        for key, state in new_states.items():
-            old = existing.get(key)
-            if state.free_status == "active" and (not old or old.free_status != "active"):
-                new_free += 1
-            if state.paid_status == "active" and (not old or old.paid_status != "active"):
-                new_paid += 1
-            # Count conversions incrementally: a member counts as a new conversion
-            # when their lifecycle status becomes "converted" on this run.
-            if state.current_status == "converted" and (not old or old.current_status != "converted"):
-                conversions += 1
-            if old and old.free_status == "active" and state.free_status == "removed":
-                removed_free += 1
-            if old and old.paid_status == "active" and state.paid_status == "removed":
-                removed_paid += 1
+        free_active = sum(1 for s in new_states.values() if s.free_status == "active")
+        paid_active = sum(1 for s in new_states.values() if s.paid_status == "active")
+        free_and_paid = sum(
+            1 for s in new_states.values() if s.free_status == "active" and s.paid_status == "active"
+        )
+        converted = sum(1 for s in new_states.values() if s.current_status == "converted")
+        removed_free = sum(1 for s in new_states.values() if s.free_status == "removed")
+        removed_paid = sum(1 for s in new_states.values() if s.paid_status == "removed")
 
         return DailyMetrics(
             date=self.today,
-            free_members_total=sum(1 for s in new_states.values() if s.free_status == "active"),
-            paid_members_total=sum(1 for s in new_states.values() if s.paid_status == "active"),
-            new_free_members=new_free,
-            new_paid_members=new_paid,
-            detected_conversions=conversions,
+            free_members_total=free_active,
+            paid_members_total=paid_active,
+            free_and_paid_members=free_and_paid,
+            converted_members=converted,
             removed_free_members=removed_free,
             removed_paid_members=removed_paid,
             failed_records=failed_records,
@@ -289,9 +276,8 @@ class SyncEngine:
                 finished_at=finished_at,
                 free_members_total=metrics.free_members_total,
                 paid_members_total=metrics.paid_members_total,
-                new_free_members=metrics.new_free_members,
-                new_paid_members=metrics.new_paid_members,
-                detected_conversions=metrics.detected_conversions,
+                free_and_paid_members=metrics.free_and_paid_members,
+                converted_members=metrics.converted_members,
                 removed_free_members=metrics.removed_free_members,
                 removed_paid_members=metrics.removed_paid_members,
                 failed_records=metrics.failed_records,
