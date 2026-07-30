@@ -1,24 +1,16 @@
 """Generate three days of synthetic Skool test data with unique names.
 
-The generator produces CSV snapshots that exercise the full sync pipeline:
-
-    Day 1 (2026-07-29): 25,000 free + 5,000 paid + 1,000 conversions
-    Day 2 (2026-07-30): +143 free, +23 paid (all 23 are conversions from the new free)
-    Day 3 (2026-08-01): -25 free, -5 paid, +12 free, +9 paid (5 of the 9 are conversions)
-
-Expected Google Sheet metrics after running Day 1 -> Day 2 -> Day 3 backfills:
-
-    Day 1: Free=25000,  Paid=6000,  Converted=1000, Removed free=0,  Removed paid=0
-    Day 2: Free=25143,  Paid=6023,  Converted=1023, Removed free=0,  Removed paid=0
-    Day 3: Free=25130,  Paid=6027,  Converted=1028, Removed free=25, Removed paid=5
+The generator produces CSV snapshots that exercise the full sync pipeline.
+Default dates are 2026-07-29, 2026-07-30, and 2026-08-01, but they are fully
+configurable via CLI options.
 
 Usage:
-    python scripts/generate_all_test_data.py [--output-dir data/raw]
+    python scripts/generate_all_test_data.py [--day1 DATE] [--day2 DATE] [--day3 DATE] [--output-dir data/raw]
 
 The generated CSVs are written to:
-    data/raw/2026-07-29-test/{free,paid}.csv
-    data/raw/2026-07-30-test/{free,paid}.csv
-    data/raw/2026-08-01-test/{free,paid}.csv
+    data/raw/<day1>-test/{free,paid}.csv
+    data/raw/<day2>-test/{free,paid}.csv
+    data/raw/<day3>-test/{free,paid}.csv
 """
 
 from __future__ import annotations
@@ -27,6 +19,7 @@ import argparse
 import csv
 import random
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -36,7 +29,7 @@ class Person:
     first_name: str
     last_name: str
     id: str
-    joined_at: str = "2026-07-29T00:00:00.000Z"
+    joined_at: str = ""
     membership_answers: dict[str, Any] = field(default_factory=dict)
 
 
@@ -80,6 +73,33 @@ class _NamePool:
         return result
 
 
+def _random_time_on_day(date_str: str) -> str:
+    """Return a random ISO timestamp within the given YYYY-MM-DD day."""
+    dt = datetime.strptime(date_str, "%Y-%m-%d")
+    dt = dt.replace(
+        hour=random.randint(0, 23),
+        minute=random.randint(0, 59),
+        second=random.randint(0, 59),
+    )
+    return dt.strftime("%Y-%m-%dT%H:%M:%S.000Z")
+
+
+def _later_time_same_day(iso_time: str) -> str:
+    """Return a later timestamp on the same calendar day as the provided ISO timestamp.
+
+    If the provided timestamp is already at the very end of the day, it is
+    returned unchanged so the date does not roll over.
+    """
+    dt = datetime.strptime(iso_time, "%Y-%m-%dT%H:%M:%S.000Z")
+    end_of_day = dt.replace(hour=23, minute=59, second=59)
+    seconds_available = int((end_of_day - dt).total_seconds())
+    if seconds_available < 1:
+        return dt.strftime("%Y-%m-%dT%H:%M:%S.000Z")
+    offset = random.randint(1, seconds_available)
+    dt += timedelta(seconds=offset)
+    return dt.strftime("%Y-%m-%dT%H:%M:%S.000Z")
+
+
 def _write_csv(path: Path, people: list[Person]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     fieldnames = [
@@ -110,17 +130,25 @@ def _write_csv(path: Path, people: list[Person]) -> None:
             })
 
 
-def generate_day1(pool: _NamePool, output_dir: Path) -> tuple[list[Person], list[Person]]:
+def generate_day1(pool: _NamePool, output_dir: Path, date: str) -> tuple[list[Person], list[Person]]:
     free_count = 25000
     paid_count = 5000
     overlap = 1000
 
-    free_people = [Person(f, l, pid, "2026-07-29T00:00:00.000Z") for f, l, pid in pool.take(free_count, "free")]
-    paid_people = [Person(f, l, pid, "2026-07-29T00:00:00.000Z") for f, l, pid in pool.take(paid_count, "paid")]
+    free_people: list[Person] = []
+    for f, l, pid in pool.take(free_count, "free"):
+        free_time = _random_time_on_day(date)
+        free_people.append(Person(f, l, pid, free_time))
 
-    # The first `overlap` free people also appear in paid.
+    paid_people: list[Person] = []
+    for f, l, pid in pool.take(paid_count, "paid"):
+        paid_time = _random_time_on_day(date)
+        paid_people.append(Person(f, l, pid, paid_time))
+
+    # The first `overlap` free people also appear in paid, with a later paid timestamp.
     for p in free_people[:overlap]:
-        paid_people.append(Person(p.first_name, p.last_name, p.id, "2026-07-29T00:00:00.000Z"))
+        paid_time = _later_time_same_day(p.joined_at)
+        paid_people.append(Person(p.first_name, p.last_name, p.id, paid_time))
 
     _write_csv(output_dir / "free.csv", free_people)
     _write_csv(output_dir / "paid.csv", paid_people)
@@ -132,14 +160,21 @@ def generate_day2(
     output_dir: Path,
     day1_free: list[Person],
     day1_paid: list[Person],
+    date: str,
 ) -> tuple[list[Person], list[Person]]:
     new_free_count = 143
     new_paid_count = 23  # Total new paid rows; all are conversions from the new free members.
 
-    new_free_people = [Person(f, l, pid, "2026-07-30T00:00:00.000Z") for f, l, pid in pool.take(new_free_count, "free")]
+    new_free_people: list[Person] = []
+    for f, l, pid in pool.take(new_free_count, "free"):
+        free_time = _random_time_on_day(date)
+        new_free_people.append(Person(f, l, pid, free_time))
 
-    # The first `new_paid_count` new free members also appear in paid.
-    new_conversions = [Person(p.first_name, p.last_name, p.id, "2026-07-30T00:00:00.000Z") for p in new_free_people[:new_paid_count]]
+    # The first `new_paid_count` new free members also appear in paid, with a later timestamp.
+    new_conversions = [
+        Person(p.first_name, p.last_name, p.id, _later_time_same_day(p.joined_at))
+        for p in new_free_people[:new_paid_count]
+    ]
 
     day2_free = day1_free + new_free_people
     day2_paid = day1_paid + new_conversions
@@ -154,12 +189,13 @@ def generate_day3(
     output_dir: Path,
     day2_free: list[Person],
     day2_paid: list[Person],
+    date: str,
 ) -> tuple[list[Person], list[Person]]:
     removed_free = 25
     removed_paid = 5
     new_free_count = 12
     new_paid_total = 9
-    new_conversions = 5
+    new_conversion_count = 5
 
     free_only = [p for p in day2_free if p.id not in {x.id for x in day2_paid}]
     paid_only = [p for p in day2_paid if p.id not in {x.id for x in day2_free}]
@@ -174,12 +210,22 @@ def generate_day3(
     day3_paid = [p for p in day2_paid if p.id not in remove_paid_ids]
 
     # Add new free members; some become conversions, the rest stay free-only.
-    new_free_people = [Person(f, l, pid, "2026-08-01T00:00:00.000Z") for f, l, pid in pool.take(new_free_count, "free")]
-    new_conversions = [Person(p.first_name, p.last_name, p.id, "2026-08-01T00:00:00.000Z") for p in new_free_people[:new_conversions]]
+    new_free_people: list[Person] = []
+    for f, l, pid in pool.take(new_free_count, "free"):
+        free_time = _random_time_on_day(date)
+        new_free_people.append(Person(f, l, pid, free_time))
+
+    new_conversions = [
+        Person(p.first_name, p.last_name, p.id, _later_time_same_day(p.joined_at))
+        for p in new_free_people[:new_conversion_count]
+    ]
 
     # Add the remaining new paid-only members.
     new_paid_only_count = new_paid_total - len(new_conversions)
-    new_paid_only = [Person(f, l, pid, "2026-08-01T00:00:00.000Z") for f, l, pid in pool.take(new_paid_only_count, "paid")]
+    new_paid_only: list[Person] = []
+    for f, l, pid in pool.take(new_paid_only_count, "paid"):
+        paid_time = _random_time_on_day(date)
+        new_paid_only.append(Person(f, l, pid, paid_time))
 
     day3_paid.extend(new_conversions)
     day3_paid.extend(new_paid_only)
@@ -193,15 +239,18 @@ def generate_day3(
 def main() -> None:
     parser = argparse.ArgumentParser(description="Generate synthetic Skool CSV snapshots for testing.")
     parser.add_argument("--output-dir", type=Path, default=Path("data/raw"), help="Directory for the generated snapshots.")
+    parser.add_argument("--day1", type=str, default="2026-07-29", help="Date for Day 1 snapshots (YYYY-MM-DD).")
+    parser.add_argument("--day2", type=str, default="2026-07-30", help="Date for Day 2 snapshots (YYYY-MM-DD).")
+    parser.add_argument("--day3", type=str, default="2026-08-01", help="Date for Day 3 snapshots (YYYY-MM-DD).")
     args = parser.parse_args()
 
     random.seed(42)
     pool = _NamePool()
     base_dir = args.output_dir
 
-    d1_free, d1_paid = generate_day1(pool, base_dir / "2026-07-29-test")
-    d2_free, d2_paid = generate_day2(pool, base_dir / "2026-07-30-test", d1_free, d1_paid)
-    d3_free, d3_paid = generate_day3(pool, base_dir / "2026-08-01-test", d2_free, d2_paid)
+    d1_free, d1_paid = generate_day1(pool, base_dir / f"{args.day1}-test", args.day1)
+    d2_free, d2_paid = generate_day2(pool, base_dir / f"{args.day2}-test", d1_free, d1_paid, args.day2)
+    d3_free, d3_paid = generate_day3(pool, base_dir / f"{args.day3}-test", d2_free, d2_paid, args.day3)
 
     for label, free, paid in [
         ("Day 1", d1_free, d1_paid),

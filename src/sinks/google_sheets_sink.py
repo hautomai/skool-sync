@@ -100,6 +100,13 @@ class GoogleSheetsSink(Sink):
         self.members_sheet = settings.google_sheets_members_sheet
         self.metrics_sheet = settings.google_sheets_daily_metrics_sheet
         self.members_filter = settings.google_sheets_members_filter.lower()
+        # When the owner filters to converted members only, default the sheet
+        # name to "converted" so the tab clearly describes its contents. A
+        # custom GOOGLE_SHEETS_MEMBERS_SHEET value is still respected.
+        if self.members_filter == "converted" and settings.google_sheets_members_sheet == "Members":
+            self.members_sheet = "converted"
+        else:
+            self.members_sheet = settings.google_sheets_members_sheet
 
         # Populated by fetch_existing() and consumed by write_members().
         self._existing_rows: dict[str, list[Any]] | None = None
