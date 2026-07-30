@@ -73,6 +73,16 @@ def _generate_unique_names(total: int) -> list[tuple[str, str]]:
     return names
 
 
+def _profile_pic_url(person_id: str) -> str:
+    """Return a deterministic, unique profile picture URL for a person.
+
+    The URL is global to the person, so the same person has the same URL in both
+    communities, which mirrors the real Apify export and exercises the
+    profile-pic hash identity key.
+    """
+    return f"https://cdn.skool.com/users/{person_id}/profile.png"
+
+
 def _write_csv(path: Path, persons: list[dict], community: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     columns = [
@@ -92,7 +102,7 @@ def _write_csv(path: Path, persons: list[dict], community: str) -> None:
                 "slug": person["slug"],
                 # Leave email empty to mimic the real Skool export the user sees.
                 "email": "",
-                "profilePicUrl": "",
+                "profilePicUrl": _profile_pic_url(person["person_id"]),
                 "profilePicBubble": "",
                 "bio": "",
                 "location": "",
@@ -117,13 +127,17 @@ def generate(
     total_unique = free_count + paid_only_count
     unique_names = _generate_unique_names(total_unique)
 
-    free_names = unique_names[:free_count]
-    paid_only_names = unique_names[free_count:]
+    # Give every unique person a stable global id that survives across communities.
+    name_pairs_with_id = [(first, last, str(uuid.uuid4())) for first, last in unique_names]
+
+    free_names = name_pairs_with_id[:free_count]
+    paid_only_names = name_pairs_with_id[free_count:]
 
     # Build free persons with a deterministic join date.
     free_persons: list[dict] = []
-    for idx, (first, last) in enumerate(free_names):
+    for idx, (first, last, person_id) in enumerate(free_names):
         free_persons.append({
+            "person_id": person_id,
             "first_name": first,
             "last_name": last,
             "slug": _make_slug(first, last, idx),
@@ -132,8 +146,9 @@ def generate(
 
     # Build paid-only persons.
     paid_persons: list[dict] = []
-    for idx, (first, last) in enumerate(paid_only_names, start=free_count):
+    for idx, (first, last, person_id) in enumerate(paid_only_names, start=free_count):
         paid_persons.append({
+            "person_id": person_id,
             "first_name": first,
             "last_name": last,
             "slug": _make_slug(first, last, idx),
