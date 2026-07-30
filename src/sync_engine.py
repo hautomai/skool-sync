@@ -193,9 +193,19 @@ class SyncEngine:
                 state.first_name,
                 state.last_name,
             )
-            if fallback_key and fallback_key not in fallback_index:
-                fallback_index[fallback_key] = state
-                fallback_key_to_original_key[fallback_key] = key
+            if fallback_key:
+                if fallback_key in fallback_index:
+                    first_key = fallback_key_to_original_key[fallback_key]
+                    logger.warning(
+                        "Existing members %s and %s share the same fallback key %s; "
+                        "only the first will be reused for name/email matching.",
+                        first_key,
+                        key,
+                        fallback_key,
+                    )
+                else:
+                    fallback_index[fallback_key] = state
+                    fallback_key_to_original_key[fallback_key] = key
 
         states: dict[str, MemberState] = {}
         consumed_existing_keys: set[str] = set()
