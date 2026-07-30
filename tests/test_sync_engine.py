@@ -55,15 +55,16 @@ def test_compute_new_states_detects_conversion():
     )
     engine = SyncEngine(settings, sink=DummySink(), exporter=DummySkoolExporter())
 
-    free_member = _member("Jane", "Doe", CommunityType.FREE, "2024-01-01", skool_member_id="skool-123")
-    paid_member = _member("Jane", "Doe", CommunityType.PAID, "2024-01-02", skool_member_id="skool-123")
+    free_member = _member("Jane", "Doe", CommunityType.FREE, "2024-01-01", skool_member_id="free-123")
+    paid_member = _member("Jane", "Doe", CommunityType.PAID, "2024-01-02", skool_member_id="paid-456")
 
     states = engine._compute_new_states({}, [free_member], [])
-    assert states["skool-123"].current_status == "free_only"
+    assert states["jane|doe"].current_status == "free_only"
 
     states = engine._compute_new_states(states, [], [paid_member])
-    assert states["skool-123"].conversion_detected_at == "2024-01-02 00:00:00"
-    assert states["skool-123"].current_status == "converted"
+    assert states["jane|doe"].conversion_detected_at == "2024-01-02 00:00:00"
+    assert states["jane|doe"].current_status == "converted"
+    assert states["jane|doe"].skool_member_id == "paid-456"
 
 
 def test_members_without_email_are_matched_by_name():
@@ -155,14 +156,14 @@ def test_conversion_detected_when_emails_differ_but_name_matches():
         paid_community_url="https://www.skool.com/paid",
     )
     engine = SyncEngine(settings, sink=DummySink(), exporter=DummySkoolExporter())
-    free_member = _member("Jane", "Doe", CommunityType.FREE, "2024-01-01", skool_member_id="skool-789")
-    paid_member = _member("Jane", "Doe", CommunityType.PAID, "2024-01-05", skool_member_id="skool-789")
+    free_member = _member("Jane", "Doe", CommunityType.FREE, "2024-01-01", skool_member_id="free-789")
+    paid_member = _member("Jane", "Doe", CommunityType.PAID, "2024-01-05", skool_member_id="paid-789")
 
     states = engine._compute_new_states({}, [free_member], [paid_member])
 
-    assert "skool-789" in states
-    assert states["skool-789"].conversion_detected_at == "2024-01-05 00:00:00"
-    assert states["skool-789"].current_status == "converted"
+    assert "jane|doe" in states
+    assert states["jane|doe"].conversion_detected_at == "2024-01-05 00:00:00"
+    assert states["jane|doe"].current_status == "converted"
 
 
 def test_metrics_reflect_membership_snapshot():
@@ -172,8 +173,8 @@ def test_metrics_reflect_membership_snapshot():
         paid_community_url="https://www.skool.com/paid",
     )
     engine = SyncEngine(settings, sink=DummySink(), exporter=DummySkoolExporter())
-    free_member = _member("Jane", "Doe", CommunityType.FREE, "2024-01-01", skool_member_id="skool-metrics")
-    paid_member = _member("Jane", "Doe", CommunityType.PAID, "2024-01-02", skool_member_id="skool-metrics")
+    free_member = _member("Jane", "Doe", CommunityType.FREE, "2024-01-01", skool_member_id="free-metrics")
+    paid_member = _member("Jane", "Doe", CommunityType.PAID, "2024-01-02", skool_member_id="paid-metrics")
 
     # Jane is active in both communities: she counts as converted.
     states = engine._compute_new_states({}, [free_member], [paid_member])
@@ -198,7 +199,7 @@ def test_removed_counts_are_incremental():
         paid_community_url="https://www.skool.com/paid",
     )
     engine = SyncEngine(settings, sink=DummySink(), exporter=DummySkoolExporter())
-    member = _member("Jane", "Doe", CommunityType.FREE, "2024-01-01", skool_member_id="skool-remove")
+    member = _member("Jane", "Doe", CommunityType.FREE, "2024-01-01", skool_member_id="free-remove")
 
     # Day 1: Jane is active in free.
     states_day1 = engine._compute_new_states({}, [member], [])
@@ -230,17 +231,16 @@ def test_legacy_name_key_migrates_to_member_id():
     )
     legacy_states = {"jane|doe": legacy_state}
 
-    # Day 2: the same person arrives with a member id.
-    new_member = _member("Jane", "Doe", CommunityType.FREE, "2024-01-02", skool_member_id="skool-migrate")
+    # Day 2: the same person arrives with a (community-specific) member id.
+    new_member = _member("Jane", "Doe", CommunityType.FREE, "2024-01-02", skool_member_id="free-migrate")
     states = engine._compute_new_states(legacy_states, [new_member], [])
 
-    # Should have exactly one active free member, keyed by member id.
+    # Should have exactly one active free member, keyed by name.
     assert len(states) == 1
-    assert "skool-migrate" in states
-    assert states["skool-migrate"].free_status == "active"
-    assert states["skool-migrate"].first_name == "Jane"
-    # The legacy name key should not be present as a removed duplicate.
-    assert "jane|doe" not in states
+    assert "jane|doe" in states
+    assert states["jane|doe"].free_status == "active"
+    assert states["jane|doe"].first_name == "Jane"
+    assert states["jane|doe"].skool_member_id == "free-migrate"
 
 
 def test_member_id_state_matched_by_name_does_not_create_ghost():
@@ -251,22 +251,21 @@ def test_member_id_state_matched_by_name_does_not_create_ghost():
     )
     engine = SyncEngine(settings, sink=DummySink(), exporter=DummySkoolExporter())
 
-    # Day 1: state keyed by member id.
+    # Day 1: state keyed by name.
     state_day1 = MemberState(
-        skool_member_id="skool-ghost",
+        skool_member_id="paid-ghost",
         first_name="Jane",
         last_name="Doe",
         full_name="Jane Doe",
         free_status="active",
     )
 
-    # Day 2: incoming record has no member id, only a matching name.
-    new_member = _member("Jane", "Doe", CommunityType.FREE, "2024-01-02")
-    states = engine._compute_new_states({"skool-ghost": state_day1}, [new_member], [])
+    # Day 2: incoming paid record has a different community-specific member id, same name.
+    new_member = _member("Jane", "Doe", CommunityType.FREE, "2024-01-02", skool_member_id="free-ghost")
+    states = engine._compute_new_states({"jane|doe": state_day1}, [new_member], [])
 
-    # Exactly one active state, no duplicate removed record under the member id.
+    # Exactly one active state, matched by name; paid member id is preserved.
     assert len(states) == 1
     assert "jane|doe" in states
     assert states["jane|doe"].free_status == "active"
-    assert states["jane|doe"].skool_member_id == "skool-ghost"
-    assert "skool-ghost" not in states
+    assert states["jane|doe"].skool_member_id == "free-ghost"

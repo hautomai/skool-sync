@@ -188,7 +188,6 @@ class SyncEngine:
                 existing_by_key[key] = state
 
             fallback_key = generate_key(
-                "",
                 state.email,
                 state.first_name,
                 state.last_name,
@@ -211,25 +210,20 @@ class SyncEngine:
         consumed_existing_keys: set[str] = set()
 
         def _lookup_state(member: Member | None) -> tuple[MemberState | None, str | None]:
-            """Find an existing state by member id or legacy fallback key.
+            """Find an existing state by the member's name/email key.
 
             Returns the state and the original key under which it was stored,
-            so migrated legacy records can be marked consumed and not re-added
+            so legacy member-id-keyed records can be migrated and not re-added
             as removed.
             """
             if member is None:
                 return None, None
-            if member.skool_member_id and member.skool_member_id in existing_by_key:
-                return existing_by_key[member.skool_member_id], member.skool_member_id
-            fallback_key = generate_key(
-                "",
-                member.email,
-                member.first_name,
-                member.last_name,
-            )
-            if fallback_key and fallback_key in fallback_index:
-                original_key = fallback_key_to_original_key.get(fallback_key, fallback_key)
-                return fallback_index[fallback_key], original_key
+            key = generate_key(member.email, member.first_name, member.last_name)
+            if key in existing_by_key:
+                return existing_by_key[key], key
+            if key in fallback_index:
+                original_key = fallback_key_to_original_key.get(key, key)
+                return fallback_index[key], original_key
             return None, None
 
         for key in all_keys:

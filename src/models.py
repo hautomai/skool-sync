@@ -49,7 +49,7 @@ class Member:
 
     @property
     def key(self) -> str:
-        return generate_key(self.skool_member_id, self.email, self.first_name, self.last_name)
+        return generate_key(self.email, self.first_name, self.last_name)
 
 
 @dataclass
@@ -78,7 +78,7 @@ class MemberState:
 
     @property
     def key(self) -> str:
-        return generate_key(self.skool_member_id, self.email, self.first_name, self.last_name)
+        return generate_key(self.email, self.first_name, self.last_name)
 
 
 @dataclass

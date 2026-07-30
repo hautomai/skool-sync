@@ -95,7 +95,7 @@ def test_normalize_splits_full_name_when_first_last_missing():
     assert member.last_name == "Smith"
 
 
-def test_normalize_uses_skool_member_id_as_key():
+def test_normalize_keeps_skool_member_id_but_keys_by_name():
     raw = {
         "First Name": "Jane",
         "Last Name": "Doe",
@@ -111,5 +111,7 @@ def test_normalize_uses_skool_member_id_as_key():
         snapshot_date="2024-01-01",
         imported_at=datetime.now(timezone.utc),
     )
+    # Member id is stored for reference but the identity key is name-based
+    # because Skool ids are community-specific.
     assert member.skool_member_id == "skool-abc-123"
-    assert member.key == "skool-abc-123"
+    assert member.key == "jane|doe"
