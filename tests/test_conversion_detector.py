@@ -8,7 +8,7 @@ from src.conversion_detector import apply_membership, build_initial_state, detec
 from src.models import CommunityType, Member
 
 
-def _member(community_type: CommunityType, snapshot_date: str, email: str = "") -> Member:
+def _member(community_type: CommunityType, snapshot_date: str, email: str = "", skool_member_id: str = "") -> Member:
     return Member(
         email=email,
         community_type=community_type,
@@ -17,40 +17,41 @@ def _member(community_type: CommunityType, snapshot_date: str, email: str = "") 
         source_file=f"{community_type.value}.csv",
         imported_at=datetime.now(timezone.utc),
         snapshot_date=snapshot_date,
+        skool_member_id=skool_member_id,
     )
 
 
 def test_detects_conversion_on_day_paid_appears():
-    state = build_initial_state(_member(CommunityType.FREE, "2024-01-01"))
-    state = apply_membership(state, _member(CommunityType.FREE, "2024-01-01"), CommunityType.FREE, "2024-01-01 10:00:00")
-    state = apply_membership(state, _member(CommunityType.PAID, "2024-01-05"), CommunityType.PAID, "2024-01-05 14:30:00")
+    state = build_initial_state(_member(CommunityType.FREE, "2024-01-01", skool_member_id="cd-1"))
+    state = apply_membership(state, _member(CommunityType.FREE, "2024-01-01", skool_member_id="cd-1"), CommunityType.FREE, "2024-01-01 10:00:00")
+    state = apply_membership(state, _member(CommunityType.PAID, "2024-01-05", skool_member_id="cd-1"), CommunityType.PAID, "2024-01-05 14:30:00")
     assert state.first_seen_free_at == "2024-01-01 00:00:00"
     assert state.first_seen_paid_at == "2024-01-05 00:00:00"
     assert state.conversion_detected_at == "2024-01-05 00:00:00"
 
 
 def test_conversion_date_preserved_across_runs():
-    state = build_initial_state(_member(CommunityType.FREE, "2024-01-01"))
-    state = apply_membership(state, _member(CommunityType.FREE, "2024-01-01"), CommunityType.FREE, "2024-01-01 10:00:00")
-    state = apply_membership(state, _member(CommunityType.PAID, "2024-01-05"), CommunityType.PAID, "2024-01-05 14:30:00")
+    state = build_initial_state(_member(CommunityType.FREE, "2024-01-01", skool_member_id="cd-2"))
+    state = apply_membership(state, _member(CommunityType.FREE, "2024-01-01", skool_member_id="cd-2"), CommunityType.FREE, "2024-01-01 10:00:00")
+    state = apply_membership(state, _member(CommunityType.PAID, "2024-01-05", skool_member_id="cd-2"), CommunityType.PAID, "2024-01-05 14:30:00")
     # Later run with a newer paid snapshot should not overwrite conversion_detected_at
     state = apply_membership(state, _member(CommunityType.PAID, "2024-01-10"), CommunityType.PAID, "2024-01-10 09:00:00")
     assert state.conversion_detected_at == "2024-01-05 00:00:00"
 
 
 def test_both_status_when_active_in_both():
-    state = build_initial_state(_member(CommunityType.FREE, "2024-01-01"))
-    state = apply_membership(state, _member(CommunityType.FREE, "2024-01-01"), CommunityType.FREE, "2024-01-01 10:00:00")
-    state = apply_membership(state, _member(CommunityType.PAID, "2024-01-02"), CommunityType.PAID, "2024-01-02 14:30:00")
-    states = detect_conversions({"jane|doe": state})
-    assert states["jane|doe"].current_status == "converted"
+    state = build_initial_state(_member(CommunityType.FREE, "2024-01-01", skool_member_id="cd-3"))
+    state = apply_membership(state, _member(CommunityType.FREE, "2024-01-01", skool_member_id="cd-3"), CommunityType.FREE, "2024-01-01 10:00:00")
+    state = apply_membership(state, _member(CommunityType.PAID, "2024-01-02", skool_member_id="cd-3"), CommunityType.PAID, "2024-01-02 14:30:00")
+    states = detect_conversions({"cd-3": state})
+    assert states["cd-3"].current_status == "converted"
 
 
 def test_email_carried_into_state():
-    member = _member(CommunityType.FREE, "2024-01-01", email="jane@example.com")
+    member = _member(CommunityType.FREE, "2024-01-01", email="jane@example.com", skool_member_id="cd-4")
     state = build_initial_state(member)
     assert state.email == "jane@example.com"
-    state = apply_membership(state, _member(CommunityType.PAID, "2024-01-02"), CommunityType.PAID, "2024-01-02 14:30:00")
+    state = apply_membership(state, _member(CommunityType.PAID, "2024-01-02", skool_member_id="cd-4"), CommunityType.PAID, "2024-01-02 14:30:00")
     assert state.email == "jane@example.com"
 
 

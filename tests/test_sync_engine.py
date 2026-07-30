@@ -25,7 +25,14 @@ class DummySink(Sink):
         pass
 
 
-def _member(first_name: str, last_name: str, community: CommunityType, snapshot_date: str, email: str = "") -> Member:
+def _member(
+    first_name: str,
+    last_name: str,
+    community: CommunityType,
+    snapshot_date: str,
+    email: str = "",
+    skool_member_id: str = "",
+) -> Member:
     return Member(
         email=email,
         community_type=community,
@@ -37,6 +44,7 @@ def _member(first_name: str, last_name: str, community: CommunityType, snapshot_
         first_name=first_name,
         last_name=last_name,
         full_name=f"{first_name} {last_name}".strip(),
+        skool_member_id=skool_member_id,
     )
 
 
@@ -47,15 +55,15 @@ def test_compute_new_states_detects_conversion():
     )
     engine = SyncEngine(settings, sink=DummySink(), exporter=DummySkoolExporter())
 
-    free_member = _member("Jane", "Doe", CommunityType.FREE, "2024-01-01")
-    paid_member = _member("Jane", "Doe", CommunityType.PAID, "2024-01-02")
+    free_member = _member("Jane", "Doe", CommunityType.FREE, "2024-01-01", skool_member_id="skool-123")
+    paid_member = _member("Jane", "Doe", CommunityType.PAID, "2024-01-02", skool_member_id="skool-123")
 
     states = engine._compute_new_states({}, [free_member], [])
-    assert states["jane|doe"].current_status == "free_only"
+    assert states["skool-123"].current_status == "free_only"
 
     states = engine._compute_new_states(states, [], [paid_member])
-    assert states["jane|doe"].conversion_detected_at == "2024-01-02 00:00:00"
-    assert states["jane|doe"].current_status == "converted"
+    assert states["skool-123"].conversion_detected_at == "2024-01-02 00:00:00"
+    assert states["skool-123"].current_status == "converted"
 
 
 def test_members_without_email_are_matched_by_name():
@@ -133,11 +141,12 @@ def test_duplicate_name_warning_is_logged(caplog):
         paid_community_url="https://www.skool.com/paid",
     )
     engine = SyncEngine(settings, sink=DummySink(), exporter=DummySkoolExporter())
+    # When no member id is present, the fallback name key must be unique.
     member1 = _member("Jane", "Doe", CommunityType.FREE, "2024-01-01")
     member2 = _member("Jane", "Doe", CommunityType.FREE, "2024-01-02")
     with caplog.at_level("WARNING"):
         engine._compute_new_states({}, [member1, member2], [])
-    assert "Duplicate name key" in caplog.text
+    assert "Duplicate" in caplog.text and "key" in caplog.text
 
 
 def test_conversion_detected_when_emails_differ_but_name_matches():
@@ -146,14 +155,14 @@ def test_conversion_detected_when_emails_differ_but_name_matches():
         paid_community_url="https://www.skool.com/paid",
     )
     engine = SyncEngine(settings, sink=DummySink(), exporter=DummySkoolExporter())
-    free_member = _member("Jane", "Doe", CommunityType.FREE, "2024-01-01")
-    paid_member = _member("Jane", "Doe", CommunityType.PAID, "2024-01-05")
+    free_member = _member("Jane", "Doe", CommunityType.FREE, "2024-01-01", skool_member_id="skool-789")
+    paid_member = _member("Jane", "Doe", CommunityType.PAID, "2024-01-05", skool_member_id="skool-789")
 
     states = engine._compute_new_states({}, [free_member], [paid_member])
 
-    assert "jane|doe" in states
-    assert states["jane|doe"].conversion_detected_at == "2024-01-05 00:00:00"
-    assert states["jane|doe"].current_status == "converted"
+    assert "skool-789" in states
+    assert states["skool-789"].conversion_detected_at == "2024-01-05 00:00:00"
+    assert states["skool-789"].current_status == "converted"
 
 
 def test_metrics_reflect_membership_snapshot():
@@ -163,8 +172,8 @@ def test_metrics_reflect_membership_snapshot():
         paid_community_url="https://www.skool.com/paid",
     )
     engine = SyncEngine(settings, sink=DummySink(), exporter=DummySkoolExporter())
-    free_member = _member("Jane", "Doe", CommunityType.FREE, "2024-01-01")
-    paid_member = _member("Jane", "Doe", CommunityType.PAID, "2024-01-02")
+    free_member = _member("Jane", "Doe", CommunityType.FREE, "2024-01-01", skool_member_id="skool-metrics")
+    paid_member = _member("Jane", "Doe", CommunityType.PAID, "2024-01-02", skool_member_id="skool-metrics")
 
     # Jane is active in both communities: she counts as converted.
     states = engine._compute_new_states({}, [free_member], [paid_member])
@@ -189,7 +198,7 @@ def test_removed_counts_are_incremental():
         paid_community_url="https://www.skool.com/paid",
     )
     engine = SyncEngine(settings, sink=DummySink(), exporter=DummySkoolExporter())
-    member = _member("Jane", "Doe", CommunityType.FREE, "2024-01-01")
+    member = _member("Jane", "Doe", CommunityType.FREE, "2024-01-01", skool_member_id="skool-remove")
 
     # Day 1: Jane is active in free.
     states_day1 = engine._compute_new_states({}, [member], [])

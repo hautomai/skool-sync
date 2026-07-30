@@ -18,14 +18,14 @@ _FIRST_NAME_ALIASES = {"first name", "first_name", "firstname"}
 _LAST_NAME_ALIASES = {"last name", "last_name", "lastname"}
 _JOINED_ALIASES = {"joined", "join date", "join_date", "joined at", "joined_at", "member since", "joinedat"}
 _INVITED_ALIASES = {"invited by", "invited_by", "inviter", "invitedby"}
-_ID_ALIASES = {"id", "member id", "member_id", "skool id", "skool_id", "skool_member_id"}
+_ID_ALIASES = {"id", "member id", "member_id", "memberId", "skool id", "skool_id", "skool_member_id"}
 
 
 def _find_column(columns: list[str], aliases: set[str]) -> str | None:
     lowered = {c.lower().strip(): c for c in columns}
     for alias in aliases:
-        if alias in lowered:
-            return lowered[alias]
+        if alias.lower() in lowered:
+            return lowered[alias.lower()]
     return None
 
 

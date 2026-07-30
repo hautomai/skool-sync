@@ -183,11 +183,11 @@ def test_write_members_filtered_to_converted(
     sink._existing_rows = {}
     sink._existing_ids = {}
 
-    converted_member = MemberState(email="jane@example.com", first_name="Jane", last_name="Doe")
+    converted_member = MemberState(skool_member_id="m-1", email="jane@example.com", first_name="Jane", last_name="Doe")
     converted_member.current_status = "converted"
-    free_member = MemberState(email="john.free@example.com", first_name="John", last_name="Free")
+    free_member = MemberState(skool_member_id="m-2", email="john.free@example.com", first_name="John", last_name="Free")
     free_member.current_status = "free_only"
-    paid_member = MemberState(email="john.paid@example.com", first_name="John", last_name="Paid")
+    paid_member = MemberState(skool_member_id="m-3", email="john.paid@example.com", first_name="John", last_name="Paid")
     paid_member.current_status = "paid_only"
 
     sink.write_members([converted_member, free_member, paid_member], {}, {})
@@ -196,7 +196,7 @@ def test_write_members_filtered_to_converted(
     assert headers_written == [(sink.members_sheet, MEMBER_HEADERS)]
     assert len(appended) == 1
     assert len(appended[0]) == 1
-    assert appended[0][0][0] == "jane|doe"
+    assert appended[0][0][0] == "m-1"
     assert appended[0][0][1] == "jane@example.com"
     assert appended[0][0][2] == "Jane"
     assert not updated

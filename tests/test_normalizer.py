@@ -93,3 +93,23 @@ def test_normalize_splits_full_name_when_first_last_missing():
     )
     assert member.first_name == "Alice"
     assert member.last_name == "Smith"
+
+
+def test_normalize_uses_skool_member_id_as_key():
+    raw = {
+        "First Name": "Jane",
+        "Last Name": "Doe",
+        "memberId": "skool-abc-123",
+        "Joined": "2024-02-01",
+    }
+    member = normalize_record(
+        raw=raw,
+        community_type=CommunityType.FREE,
+        community_name="Free Community",
+        community_slug="free-community",
+        source_file="/tmp/free.csv",
+        snapshot_date="2024-01-01",
+        imported_at=datetime.now(timezone.utc),
+    )
+    assert member.skool_member_id == "skool-abc-123"
+    assert member.key == "skool-abc-123"

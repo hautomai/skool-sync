@@ -23,7 +23,7 @@ from .normalizer import normalize_records
 from .sinks.base import Sink
 from .sinks.google_sheets_sink import GoogleSheetsSink
 from .sinks.noop_sink import NoOpSink
-from .utils import ensure_dir, safe_filename, utc_now
+from .utils import ensure_dir, generate_key, safe_filename, utc_now
 
 logger = logging.getLogger("skool_sync")
 
@@ -156,35 +156,65 @@ class SyncEngine:
         self._warn_duplicate_keys(free_members, CommunityType.FREE)
         self._warn_duplicate_keys(paid_members, CommunityType.PAID)
 
-        # Index today's members by name-first key.
+        # Index today's members by their preferred key (member id first).
         free_by_key: dict[str, Member] = {m.key: m for m in free_members if m.key}
         paid_by_key: dict[str, Member] = {m.key: m for m in paid_members if m.key}
         all_keys = set(free_by_key.keys()) | set(paid_by_key.keys())
 
-        # Re-index existing states by the current email-first key. This upgrades
-        # legacy email-only keys to name keys when names are present.
+        # Build a secondary index using the legacy name/email fallback key so
+        # existing local state and Google Sheet rows keyed by name can be
+        # seamlessly migrated to the new member-id key on the first run.
         existing_by_key: dict[str, MemberState] = {}
+        fallback_index: dict[str, MemberState] = {}
         for state in existing.values():
             key = state.key
             if key in existing_by_key:
                 logger.warning(
                     "Duplicate key in existing data: %s. "
-                    "Two different member records share the same email/name.",
+                    "Two different member records share the same id/name.",
                     key,
                 )
             else:
                 existing_by_key[key] = state
 
+            fallback_key = generate_key(
+                "",
+                state.email,
+                state.first_name,
+                state.last_name,
+            )
+            if fallback_key and fallback_key not in fallback_index:
+                fallback_index[fallback_key] = state
+
         states: dict[str, MemberState] = {}
+
+        def _lookup_state(member: Member | None) -> MemberState | None:
+            """Find an existing state by member id or legacy fallback key."""
+            if member is None:
+                return None
+            if member.skool_member_id and member.skool_member_id in existing_by_key:
+                return existing_by_key[member.skool_member_id]
+            fallback_key = generate_key(
+                "",
+                member.email,
+                member.first_name,
+                member.last_name,
+            )
+            if fallback_key and fallback_key in fallback_index:
+                return fallback_index[fallback_key]
+            return None
 
         for key in all_keys:
             free_member = free_by_key.get(key)
             paid_member = paid_by_key.get(key)
             representative = free_member or paid_member
 
-            state = existing_by_key.get(key)
+            # Try primary lookup on member id, then legacy fallback.
+            any_member = paid_member or free_member
+            state = _lookup_state(any_member)
             if state is None:
                 state = MemberState(
+                    skool_member_id=representative.skool_member_id if representative else "",
                     email=representative.email if representative else "",
                     first_name=representative.first_name if representative else "",
                     last_name=representative.last_name if representative else "",
@@ -193,8 +223,10 @@ class SyncEngine:
             else:
                 # Deep copy so metrics can compare the old state against the new one.
                 state = copy.deepcopy(state)
-                # Update name fields if the member's name changed.
+                # Update name/id fields if the member's data changed.
                 if representative:
+                    if representative.skool_member_id:
+                        state.skool_member_id = representative.skool_member_id
                     if representative.first_name:
                         state.first_name = representative.first_name
                     if representative.last_name:

@@ -71,13 +71,21 @@ def safe_filename(name: str) -> str:
     return "".join(c if c.isalnum() or c in "._- " else "_" for c in name).strip()
 
 
-def generate_key(email: str = "", first_name: str = "", last_name: str = "") -> str:
+def generate_key(
+    member_id: str = "",
+    email: str = "",
+    first_name: str = "",
+    last_name: str = "",
+) -> str:
     """Stable identity key for a member.
 
-    Prefer a normalized first_name|last_name key (matches Skool CSV output).
-    Fall back to email: when names are missing so members without names can
-    still be tracked.
+    Prefer the stable Skool member id. When it is missing (e.g. legacy CSVs),
+    fall back to a normalized first_name|last_name key, and finally to the
+    email address when no names are available.
     """
+    clean_id = str(member_id).strip()
+    if clean_id:
+        return clean_id
     key = f"{first_name.strip().lower()}|{last_name.strip().lower()}"
     if key != "|":
         return key

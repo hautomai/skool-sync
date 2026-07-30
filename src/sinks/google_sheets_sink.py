@@ -360,7 +360,11 @@ class GoogleSheetsSink(Sink):
         except Exception:
             membership_answers = {}
 
+        member_key = _value("member key")
+        skool_member_id = member_key if member_key and "|" not in member_key and not member_key.startswith("email:") else ""
+
         return MemberState(
+            skool_member_id=skool_member_id,
             email=_value("email"),
             first_name=_value("first name", "first_name"),
             last_name=_value("last name", "last_name"),
@@ -408,9 +412,9 @@ class GoogleSheetsSink(Sink):
                 continue
 
             state = self._row_to_member(row, header) or MemberState()
-            # Use the current key derivation (name-first, email fallback) so
-            # legacy email-keyed rows are re-keyed to name keys when names are
-            # present. This makes migrating from email keys seamless.
+            # Use the current key derivation (member id first, then name/email).
+            # The sink preserves the raw "Member key" value, so legacy name- or
+            # email-keyed rows are migrated to member-id keys on the next write.
             key = state.key
             if not key:
                 continue
