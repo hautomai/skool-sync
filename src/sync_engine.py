@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import dataclasses
 import json
 import logging
 from pathlib import Path
@@ -47,6 +48,7 @@ class SyncEngine:
             else utc_now().strftime("%Y-%m-%d %H:%M:%S")
         )
         self.snapshot_dir = ensure_dir(Path(self.settings.download_dir) / self.today)
+        self._state_file = Path(self.settings.download_dir) / "state" / "member_state.json"
 
     def _build_exporter(self) -> SkoolExporter:
         return ApifySkoolExporter(self.settings)
@@ -55,6 +57,32 @@ class SyncEngine:
         if self.settings.dry_run:
             return NoOpSink()
         return GoogleSheetsSink(self.settings)
+
+    def _read_local_state(self) -> dict[str, MemberState]:
+        """Load the previous full member state from local JSON."""
+        if not self._state_file.exists():
+            return {}
+        try:
+            with self._state_file.open("r", encoding="utf-8") as f:
+                data = json.load(f)
+            return {key: MemberState(**value) for key, value in data.items()}
+        except Exception as exc:
+            logger.warning("Could not read local state from %s: %s", self._state_file, exc)
+            return {}
+
+    def _write_local_state(self, states: dict[str, MemberState]) -> None:
+        """Persist the full member state to local JSON for the next run."""
+        ensure_dir(self._state_file.parent)
+        try:
+            with self._state_file.open("w", encoding="utf-8") as f:
+                json.dump(
+                    {key: dataclasses.asdict(state) for key, state in states.items()},
+                    f,
+                    indent=2,
+                    default=str,
+                )
+        except Exception as exc:
+            logger.warning("Could not write local state to %s: %s", self._state_file, exc)
 
     async def _download_community_csv(
         self,
@@ -190,6 +218,8 @@ class SyncEngine:
         # Members no longer in either community should be flagged removed.
         for key, state in existing_by_key.items():
             if key not in all_keys:
+                # Deep-copy so the caller's previous-state dict isn't mutated.
+                state = copy.deepcopy(state)
                 state = flag_removed(state, CommunityType.FREE, self.run_time)
                 state = flag_removed(state, CommunityType.PAID, self.run_time)
                 state.last_synced_at = utc_now().isoformat()
@@ -199,25 +229,31 @@ class SyncEngine:
 
     def _calculate_metrics(
         self,
-        existing: dict[str, MemberState],
+        previous: dict[str, MemberState],
         new_states: dict[str, MemberState],
         failed_records: int,
         runtime_seconds: float,
     ) -> DailyMetrics:
         free_active = sum(1 for s in new_states.values() if s.free_status == "active")
         paid_active = sum(1 for s in new_states.values() if s.paid_status == "active")
-        free_and_paid = sum(
-            1 for s in new_states.values() if s.free_status == "active" and s.paid_status == "active"
-        )
         converted = sum(1 for s in new_states.values() if s.current_status == "converted")
-        removed_free = sum(1 for s in new_states.values() if s.free_status == "removed")
-        removed_paid = sum(1 for s in new_states.values() if s.paid_status == "removed")
+
+        # Removed = was active in previous state, now marked removed.
+        removed_free = sum(
+            1
+            for key, s in new_states.items()
+            if s.free_status == "removed" and key in previous and previous[key].free_status == "active"
+        )
+        removed_paid = sum(
+            1
+            for key, s in new_states.items()
+            if s.paid_status == "removed" and key in previous and previous[key].paid_status == "active"
+        )
 
         return DailyMetrics(
             date=self.today,
             free_members_total=free_active,
             paid_members_total=paid_active,
-            free_and_paid_members=free_and_paid,
             converted_members=converted,
             removed_free_members=removed_free,
             removed_paid_members=removed_paid,
@@ -244,30 +280,30 @@ class SyncEngine:
             if self.settings.dry_run and not free_members and not paid_members:
                 notes.append("Dry run skipped live export and no existing snapshots were found.")
 
+            # The sink only persists converted members (by design), so we keep a
+            # full local state file to compute true incremental removals.
+            previous_states = self._read_local_state()
+
             if self.settings.dry_run:
                 logger.info("[DRY RUN] Skipping sink writes")
-                existing_states: dict[str, MemberState] = {}
+                sheet_existing_states: dict[str, MemberState] = {}
                 existing_ids: dict[str, str] = {}
             else:
-                raw_existing_states, existing_ids = self.sink.fetch_existing()
-                # Re-index existing states by the current email-first key so legacy
-                # name-only rows are matched correctly.
-                existing_states = {
-                    state.key: state for state in raw_existing_states.values() if state.key
-                }
+                sheet_existing_states, existing_ids = self.sink.fetch_existing()
 
-            new_states = self._compute_new_states(existing_states, free_members, paid_members)
+            new_states = self._compute_new_states(previous_states, free_members, paid_members)
 
             runtime = (utc_now() - started_at).total_seconds()
-            metrics = self._calculate_metrics(existing_states, new_states, failed_records, runtime)
+            metrics = self._calculate_metrics(previous_states, new_states, failed_records, runtime)
 
             if not self.settings.dry_run:
                 self.sink.write_members(
                     list(new_states.values()),
-                    existing_states=existing_states,
+                    existing_states=sheet_existing_states,
                     existing_ids=existing_ids,
                 )
                 self.sink.write_daily_metrics(metrics)
+                self._write_local_state(new_states)
 
             finished_at = utc_now()
             summary = SyncSummary(
@@ -276,7 +312,6 @@ class SyncEngine:
                 finished_at=finished_at,
                 free_members_total=metrics.free_members_total,
                 paid_members_total=metrics.paid_members_total,
-                free_and_paid_members=metrics.free_and_paid_members,
                 converted_members=metrics.converted_members,
                 removed_free_members=metrics.removed_free_members,
                 removed_paid_members=metrics.removed_paid_members,

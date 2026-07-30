@@ -96,14 +96,16 @@ def _backfill_from_dir(settings: Settings, backfill_dir: str) -> None:
         sink=sink,
         run_date=snapshot_date,
     )
-    states = engine._compute_new_states(existing_states, free_members, paid_members)
+    previous_states = engine._read_local_state()
+    states = engine._compute_new_states(previous_states, free_members, paid_members)
 
     if sink is not None:
         sink.write_members(list(states.values()), existing_states, existing_ids)
+        engine._write_local_state(states)
 
     finished_at = utc_now()
     runtime = (finished_at - started_at).total_seconds()
-    metrics = engine._calculate_metrics(existing_states, states, failed_records=0, runtime_seconds=runtime)
+    metrics = engine._calculate_metrics(previous_states, states, failed_records=0, runtime_seconds=runtime)
 
     if sink is not None:
         sink.write_daily_metrics(metrics)
@@ -114,7 +116,6 @@ def _backfill_from_dir(settings: Settings, backfill_dir: str) -> None:
         finished_at=finished_at,
         free_members_total=metrics.free_members_total,
         paid_members_total=metrics.paid_members_total,
-        free_and_paid_members=metrics.free_and_paid_members,
         converted_members=metrics.converted_members,
         removed_free_members=metrics.removed_free_members,
         removed_paid_members=metrics.removed_paid_members,

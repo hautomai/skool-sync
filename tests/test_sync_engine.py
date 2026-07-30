@@ -166,12 +166,11 @@ def test_metrics_reflect_membership_snapshot():
     free_member = _member("Jane", "Doe", CommunityType.FREE, "2024-01-01")
     paid_member = _member("Jane", "Doe", CommunityType.PAID, "2024-01-02")
 
-    # Jane is active in both communities: she counts as converted and free+paid.
+    # Jane is active in both communities: she counts as converted.
     states = engine._compute_new_states({}, [free_member], [paid_member])
     metrics = engine._calculate_metrics({}, states, 0, 0.0)
     assert metrics.free_members_total == 1
     assert metrics.paid_members_total == 1
-    assert metrics.free_and_paid_members == 1
     assert metrics.converted_members == 1
     assert metrics.removed_free_members == 0
     assert metrics.removed_paid_members == 0
@@ -179,4 +178,27 @@ def test_metrics_reflect_membership_snapshot():
     # Recomputing the same state keeps the same snapshot counts.
     metrics = engine._calculate_metrics(states, states, 0, 0.0)
     assert metrics.converted_members == 1
-    assert metrics.free_and_paid_members == 1
+    assert metrics.removed_free_members == 0
+    assert metrics.removed_paid_members == 0
+
+
+def test_removed_counts_are_incremental():
+    """Removed counts only include members who were active and are now removed."""
+    settings = Settings(
+        free_community_url="https://www.skool.com/free",
+        paid_community_url="https://www.skool.com/paid",
+    )
+    engine = SyncEngine(settings, sink=DummySink(), exporter=DummySkoolExporter())
+    member = _member("Jane", "Doe", CommunityType.FREE, "2024-01-01")
+
+    # Day 1: Jane is active in free.
+    states_day1 = engine._compute_new_states({}, [member], [])
+    metrics = engine._calculate_metrics({}, states_day1, 0, 0.0)
+    assert metrics.free_members_total == 1
+    assert metrics.removed_free_members == 0
+
+    # Day 2: Jane is no longer in the free CSV.
+    states_day2 = engine._compute_new_states(states_day1, [], [])
+    metrics = engine._calculate_metrics(states_day1, states_day2, 0, 0.0)
+    assert metrics.free_members_total == 0
+    assert metrics.removed_free_members == 1

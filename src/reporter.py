@@ -24,13 +24,12 @@ def human_summary(summary: SyncSummary) -> str:
         f"Dry run:       {summary.dry_run}",
         "",
         "Membership",
-        f"  Free members:             {summary.free_members_total}",
-        f"  Paid members:             {summary.paid_members_total}",
-        f"  Free and paid members:    {summary.free_and_paid_members}",
-        f"  Converted members:        {summary.converted_members}",
-        f"  Removed free members:     {summary.removed_free_members}",
-        f"  Removed paid members:     {summary.removed_paid_members}",
-        f"  Failed records:           {summary.failed_records}",
+        f"  Free members:         {summary.free_members_total}",
+        f"  Paid members:         {summary.paid_members_total}",
+        f"  Converted members:    {summary.converted_members}",
+        f"  Removed free members: {summary.removed_free_members}",
+        f"  Removed paid members: {summary.removed_paid_members}",
+        f"  Failed records:       {summary.failed_records}",
     ]
     if summary.notes:
         lines.extend(["", "Notes:", *summary.notes])
